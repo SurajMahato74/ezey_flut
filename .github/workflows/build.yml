@@ -1,0 +1,45 @@
+name: Build App Bundle
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+    
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.38.5'
+        channel: 'stable'
+    
+    - name: Get dependencies
+      run: flutter pub get
+    
+    - name: Decode keystore
+      run: |
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/keystore.jks
+        echo "storeFile=keystore.jks" > key.properties
+        echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> key.properties
+        echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> key.properties
+        echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> key.properties
+    
+    - name: Build App Bundle
+      run: flutter build appbundle --release
+    
+    - name: Upload App Bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-bundle
+        path: build/app/outputs/bundle/release/app-release.aab

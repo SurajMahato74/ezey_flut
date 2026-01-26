@@ -1,0 +1,7 @@
+name: Local Config
+version: 1.0.0
+schema: v1
+models:
+  - uses: ollama/deepseek-coder   # Chat model
+  - uses: ollama/deepseek-coder   # Edit model
+  - uses: ollama/deepseek-coder   # Autocomplete model

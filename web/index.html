@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="Instant Delivery, Simplified - A Flutter delivery app">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="ezeyway">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>Ezeyway</title>
+  <link rel="manifest" href="manifest.json">
+  
+  <!-- Agora Web SDK - Load before Flutter -->
+  <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.21.0.js"></script>
+  <script>
+    // Ensure Agora is available globally and properly initialized
+    window.AgoraRTC = window.AgoraRTC || {};
+    
+    // Wait for Agora to be fully loaded
+    function waitForAgora() {
+      return new Promise((resolve) => {
+        if (window.AgoraRTC && window.AgoraRTC.createClient) {
+          console.log('✅ Agora SDK loaded successfully');
+          resolve();
+        } else {
+          console.log('⏳ Waiting for Agora SDK...');
+          setTimeout(() => waitForAgora().then(resolve), 100);
+        }
+      });
+    }
+    
+    // Audio context activation for web browsers
+    let audioContextActivated = false;
+    
+    function activateAudioContext() {
+      if (audioContextActivated) return;
+      
+      try {
+        if (window.AudioContext || window.webkitAudioContext) {
+          const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          if (audioContext.state === 'suspended') {
+            audioContext.resume().then(() => {
+              console.log('🔊 Audio context activated');
+              audioContextActivated = true;
+            });
+          } else {
+            audioContextActivated = true;
+          }
+        }
+      } catch (e) {
+        console.error('❌ Audio context activation failed:', e);
+      }
+    }
+    
+    // Activate on first user interaction
+    document.addEventListener('click', activateAudioContext, { once: true });
+    document.addEventListener('touchstart', activateAudioContext, { once: true });
+    
+    // Initialize when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+      waitForAgora().then(() => {
+        console.log('🎯 Agora ready for Flutter');
+        activateAudioContext();
+      });
+    });
+  </script>
+</head>
+<body>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
