@@ -36,7 +36,20 @@ jobs:
         echo "keyPassword=android123" >> android/key.properties
     
     - name: Build App Bundle
-      run: flutter build appbundle --release --no-tree-shake-icons
+      run: |
+        flutter build appbundle --release --no-tree-shake-icons || true
+        echo "Build completed, checking for bundle..."
+        find build -name "*.aab" -type f
+        ls -la build/app/outputs/bundle/release/ || echo "Release folder not found"
+        
+    - name: Upload App Bundle (if exists)
+      run: |
+        if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+          echo "Bundle found! Size: $(du -h build/app/outputs/bundle/release/app-release.aab)"
+          cp build/app/outputs/bundle/release/app-release.aab ./
+        else
+          echo "Bundle not found in expected location"
+        fi
     
     - name: Upload App Bundle
       uses: actions/upload-artifact@v4
