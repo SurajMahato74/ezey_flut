@@ -36,7 +36,7 @@ jobs:
         echo "keyPassword=android123" >> android/key.properties
     
     - name: Build App Bundle
-      run: flutter build appbundle --release
+      run: flutter build appbundle --release --no-tree-shake-icons
     
     - name: Upload App Bundle
       uses: actions/upload-artifact@v4
