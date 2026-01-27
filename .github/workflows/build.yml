@@ -32,8 +32,8 @@ jobs:
         echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/upload-keystore.jks
         echo "storeFile=upload-keystore.jks" > key.properties
         echo "keyAlias=upload" >> key.properties
-        echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> key.properties
-        echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> key.properties
+        echo "storePassword=test123" >> key.properties
+        echo "keyPassword=test123" >> key.properties
         echo "Debug: Contents of key.properties:"
         cat key.properties
         echo "Debug: Keystore file exists:"
