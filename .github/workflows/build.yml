@@ -27,13 +27,13 @@ jobs:
     - name: Get dependencies
       run: flutter pub get
     
-    - name: Decode keystore
+    - name: Create keystore
       run: |
-        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/upload-keystore.jks
+        keytool -genkey -v -keystore android/app/upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload -storepass android123 -keypass android123 -dname "CN=Upload, OU=Android, O=Company, L=City, S=State, C=US"
         echo "storeFile=../app/upload-keystore.jks" > android/key.properties
         echo "keyAlias=upload" >> android/key.properties
-        echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> android/key.properties
-        echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
+        echo "storePassword=android123" >> android/key.properties
+        echo "keyPassword=android123" >> android/key.properties
     
     - name: Build App Bundle
       run: flutter build appbundle --release
