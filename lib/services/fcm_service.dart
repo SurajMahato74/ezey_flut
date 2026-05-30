@@ -1,8 +1,11 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'auth_service.dart';
 import 'api_service.dart';
 import 'notification_service.dart';
+import 'complete_call_system.dart';
 
 class FCMService {
   static final FirebaseMessaging _messaging = FirebaseMessaging.instance;
@@ -74,10 +77,16 @@ class FCMService {
       final callerName = message.data['caller_name'] ?? 'Unknown';
       final callId = message.data['call_id'] ?? '';
       
-      await NotificationService.showCallNotification(
-        callerName: callerName,
-        callId: callId,
-      );
+      // Check for duplicate call
+      if (CompleteCallSystem.isCallActive(callId)) {
+        print('🚫 Call already active, ignoring duplicate FCM');
+        return;
+      }
+      
+      // Set as active before showing call screen
+      CompleteCallSystem.setActiveCall(callId);
+      
+      await _showCallKitUI(callerName, callId);
       return;
     }
     
@@ -99,6 +108,26 @@ class FCMService {
     print('📱 Background message tap');
     print('📱 Message data: ${message.data}');
   }
+  static Future<void> _showCallKitUI(String callerName, String callId) async {
+    await FlutterCallkitIncoming.showCallkitIncoming(CallKitParams(
+      id: callId,
+      nameCaller: callerName,
+      appName: 'Ezeyway',
+      avatar: '',
+      handle: '',
+      type: 0,
+      duration: 30000,
+      textAccept: 'Accept',
+      textDecline: 'Decline',
+      extra: <String, dynamic>{'callId': callId},
+      android: AndroidParams(
+        isCustomNotification: true,
+        isShowLogo: false,
+        backgroundColor: '#0955fa',
+        actionColor: '#4CAF50',
+      ),
+    ));
+  }
 }
 
 // Background message handler (must be top-level function)
@@ -112,10 +141,32 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     final callerName = message.data['caller_name'] ?? 'Unknown';
     final callId = message.data['call_id'] ?? '';
     
-    // Show call notification even in background
-    await NotificationService.showCallNotification(
-      callerName: callerName,
-      callId: callId,
-    );
+    // Check for duplicate call
+    if (CompleteCallSystem.isCallActive(callId)) {
+      print('🚫 Call already active, ignoring duplicate FCM background');
+      return;
+    }
+    
+    // Set as active before showing call screen
+    CompleteCallSystem.setActiveCall(callId);
+    
+    await FlutterCallkitIncoming.showCallkitIncoming(CallKitParams(
+      id: callId,
+      nameCaller: callerName,
+      appName: 'Ezeyway',
+      avatar: '',
+      handle: '',
+      type: 0,
+      duration: 30000,
+      textAccept: 'Accept',
+      textDecline: 'Decline',
+      extra: <String, dynamic>{'callId': callId},
+      android: AndroidParams(
+        isCustomNotification: true,
+        isShowLogo: false,
+        backgroundColor: '#0955fa',
+        actionColor: '#4CAF50',
+      ),
+    ));
   }
 }

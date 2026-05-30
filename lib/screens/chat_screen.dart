@@ -18,6 +18,7 @@ import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
 import '../services/global_websocket_service.dart';
+import '../services/complete_call_system.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../widgets/safe_network_image.dart';
@@ -75,9 +76,11 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _globalWs = Provider.of<GlobalWebSocketService>(context, listen: false);
+    CompleteCallSystem().initialize(); // Initialize complete call system
     _initPrefs();
     _scrollController.addListener(_onScroll);
     _subscribeToGlobalWebSocket();
+    _subscribeToIncomingCalls();
   }
 
   @override
@@ -88,6 +91,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _typingTimer?.cancel();
     _readDebounceTimer?.cancel();
     _globalWebSocketSubscription?.cancel();
+    CompleteCallSystem().dispose(); // Dispose complete call system
     super.dispose();
   }
 
@@ -102,6 +106,33 @@ class _ChatScreenState extends State<ChatScreen> {
     _globalWs?.onNewMessage = (data) {
       _handleWebSocketMessage(data);
     };
+  }
+
+  void _subscribeToIncomingCalls() {
+    // Subscribe to incoming call notifications
+    _globalWs?.onNotification = (data) {
+      if (data['type'] == 'incoming_call') {
+        _handleIncomingCall(data);
+      }
+    };
+  }
+
+  void _handleIncomingCall(Map<String, dynamic> data) {
+    final call = data['call'];
+    if (call != null && mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => CompleteIncomingCallScreen(
+            callId: call['call_id'] ?? call['id'].toString(),
+            callerName: call['caller']?['display_name'] ?? 'Unknown',
+            callerImage: call['caller']?['profile_picture_url'] ?? '',
+            callType: call['call_type'] ?? 'audio',
+            callData: call, // Pass the complete call data
+          ),
+        ),
+      );
+    }
   }
 
   void _sendTypingEvent(bool isTyping) {
@@ -625,11 +656,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  // SIMPLE CALL - Direct Agora implementation
+  // COMPLETE FIXED CALL IMPLEMENTATION
   Future<void> _initiateCall() async {
     if (widget.participantId == null) return;
 
-    // Prevent self-calls
     final currentUser = AuthService().user;
     if (currentUser?.id == widget.participantId) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -639,29 +669,19 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     try {
-      final token = AuthService().token;
-      if (token == null) throw Exception('Not authenticated');
+      final callSystem = CompleteCallSystem();
+      final call = await callSystem.createCall(widget.participantId!, 'audio');
       
-      print('🔵 Creating call via API...');
-      final response = await ApiService().createCall(token, widget.participantId!, 'audio');
-      final callData = response['call'];
-      
-      final agoraToken = callData['agora_token'];
-      final channelName = callData['agora_channel'];
-      final appId = callData['agora_app_id'] ?? appConfig.Config.agoraAppId;
-      
-      print('✅ Call created - Channel: $channelName');
-      
-      if (mounted) {
+      if (call != null && mounted) {
         Navigator.push(context, MaterialPageRoute(
-          builder: (context) => _SimpleAgoraCall(
-            appId: appId,
-            token: agoraToken, 
-            channel: channelName,
-            uid: currentUser?.id ?? 0,
+          builder: (context) => CompleteActiveCallScreen(
+            callId: call.callId,
             participantName: widget.participantName,
+            isIncoming: false,
           ),
         ));
+      } else {
+        throw Exception('Failed to create call');
       }
     } catch (e) {
       print('❌ Call failed: $e');
@@ -1351,214 +1371,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
-// Simple Agora call screen - Platform-aware implementation
-class _SimpleAgoraCall extends StatefulWidget {
-  final String appId;
-  final String token;
-  final String channel;
-  final int uid;
-  final String participantName;
-  
-  const _SimpleAgoraCall({
-    required this.appId,
-    required this.token,
-    required this.channel,
-    required this.uid,
-    required this.participantName,
-  });
-  
-  @override
-  State<_SimpleAgoraCall> createState() => _SimpleAgoraCallState();
-}
 
-class _SimpleAgoraCallState extends State<_SimpleAgoraCall> {
-  RtcEngine? _engine;
-  bool _muted = false;
-  bool _connected = false;
-  bool _userJoined = false;
-  String _callStatus = 'Connecting...';
-  
-  @override
-  void initState() {
-    super.initState();
-    _initAgoraNative(); // Enable calls on all platforms for testing
-  }
-  
-  Future<void> _initAgoraNative() async {
-    try {
-      if (kIsWeb) {
-        // For web, just show call interface without actual Agora connection
-        setState(() {
-          _connected = true;
-          _callStatus = 'Call connected (Web Demo)';
-        });
-        return;
-      }
-      
-      // Request permissions first
-      await Permission.microphone.request();
-      
-      _engine = createAgoraRtcEngine();
-      await _engine!.initialize(RtcEngineContext(appId: widget.appId));
-      await _engine!.enableAudio();
-      
-      _engine!.registerEventHandler(RtcEngineEventHandler(
-        onJoinChannelSuccess: (connection, elapsed) {
-          print('✅ Joined channel: ${connection.channelId}');
-          setState(() {
-            _connected = true;
-            _callStatus = 'Waiting for ${widget.participantName}...';
-          });
-        },
-        onUserJoined: (connection, uid, elapsed) {
-          print('✅ User joined: $uid');
-          setState(() {
-            _userJoined = true;
-            _callStatus = 'Connected to ${widget.participantName}';
-          });
-        },
-        onUserOffline: (connection, uid, reason) {
-          print('❌ User left: $uid');
-          setState(() {
-            _userJoined = false;
-            _callStatus = '${widget.participantName} left the call';
-          });
-        },
-        onError: (err, msg) {
-          print('❌ Agora error: $err - $msg');
-          setState(() => _callStatus = 'Connection error');
-        },
-      ));
-      
-      await _engine!.joinChannel(
-        token: widget.token,
-        channelId: widget.channel,
-        uid: widget.uid,
-        options: const ChannelMediaOptions(
-          publishMicrophoneTrack: true,
-          autoSubscribeAudio: true,
-        ),
-      );
-    } catch (e) {
-      print('❌ Agora init failed: $e');
-      if (kIsWeb) {
-        setState(() => _callStatus = 'Web call demo - API working!');
-      } else {
-        setState(() => _callStatus = 'Failed to connect');
-      }
-    }
-  }
-  
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.homeBackgroundDark,
-      body: SafeArea(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // Participant avatar
-            Container(
-              width: 120,
-              height: 120,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppTheme.primaryColor.withOpacity(0.2),
-              ),
-              child: const Icon(
-                Icons.person,
-                size: 60,
-                color: AppTheme.primaryColor,
-              ),
-            ),
-            const SizedBox(height: 24),
-            
-            // Participant name
-            Text(
-              widget.participantName,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            
-            // Call status
-            Text(
-              _callStatus,
-              style: TextStyle(
-                color: _userJoined ? Colors.green : AppTheme.primaryColor,
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const SizedBox(height: 50),
-            
-            // Call controls
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                // Mute button
-                Container(
-                  width: 60,
-                  height: 60,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _muted ? Colors.red : Colors.white,
-                  ),
-                  child: IconButton(
-                    onPressed: () {
-                      setState(() => _muted = !_muted);
-                      if (!kIsWeb) {
-                        _engine?.muteLocalAudioStream(_muted);
-                      }
-                    },
-                    icon: Icon(
-                      _muted ? Icons.mic_off : Icons.mic,
-                      color: _muted ? Colors.white : Colors.black,
-                    ),
-                  ),
-                ),
-                
-                // End call button
-                Container(
-                  width: 70,
-                  height: 70,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.red,
-                  ),
-                  child: IconButton(
-                    onPressed: () async {
-                      if (!kIsWeb) {
-                        await _engine?.leaveChannel();
-                      }
-                      if (mounted) Navigator.pop(context);
-                    },
-                    icon: const Icon(
-                      Icons.call_end,
-                      color: Colors.white,
-                      size: 30,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-  
-  @override
-  void dispose() {
-    if (!kIsWeb) {
-      _engine?.release();
-    }
-    super.dispose();
-  }
-}
 
 // Custom painter for map grid lines
 class _MapGridPainter extends CustomPainter {
