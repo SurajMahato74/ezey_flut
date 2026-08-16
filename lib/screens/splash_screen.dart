@@ -1,13 +1,12 @@
 // lib/screens/splash_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../services/data_preloader_service.dart';
 
 class SplashScreen extends StatefulWidget {
-  // This callback tells the parent: "Splash is done, go to main app"
   final VoidCallback? onSplashComplete;
-
   const SplashScreen({super.key, this.onSplashComplete});
 
   @override
@@ -22,21 +21,20 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   late AnimationController _logoController;
   late Animation<double> _logoScaleAnimation;
   late Animation<double> _logoFadeAnimation;
-
   late AnimationController _textController;
 
   String _displayedText = '';
   final String _fullText = 'EZEYWAY';
   int _currentCharIndex = 0;
-  
+
   final DataPreloaderService _preloader = DataPreloaderService();
 
   @override
   void initState() {
     super.initState();
     _initializeAnimations();
-    _startSplashSequence();
     _setupPreloaderListener();
+    _startSplashSequence();
   }
 
   void _initializeAnimations() {
@@ -44,15 +42,12 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     );
-
     _logoScaleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _logoController, curve: Curves.easeOutBack),
     );
-
     _logoFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _logoController, curve: Curves.easeIn),
     );
-
     _textController = AnimationController(
       duration: const Duration(milliseconds: 2000),
       vsync: this,
@@ -71,13 +66,21 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   }
 
   void _startSplashSequence() async {
+    // On web: if cache is fresh, skip straight to app with minimal delay
+    if (kIsWeb && await _preloader.isCacheFresh()) {
+      _preloader.preloadAppData(); // runs in background (cache hit = instant)
+      await Future.delayed(const Duration(milliseconds: 100));
+      widget.onSplashComplete?.call();
+      return;
+    }
+
+    // First run or stale cache: show full animation
     await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
     setState(() => _showContent = true);
 
     _logoController.forward();
 
-    // Typing animation: E → EZ → EZE → EZEY → EZEYWAY
     await Future.delayed(const Duration(milliseconds: 800));
     for (int i = 0; i < _fullText.length; i++) {
       await Future.delayed(const Duration(milliseconds: 110));
@@ -90,18 +93,14 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
 
     await Future.delayed(const Duration(milliseconds: 500));
 
-    // Start background data preloading
     _preloader.preloadAppData();
 
-    // Wait for preloading to complete or minimum splash time
-    final minimumSplashTime = Future.delayed(const Duration(milliseconds: 1500)); // Reduced from 2000ms
-    final preloadingComplete = _waitForPreloadingComplete();
-    
-    await Future.wait([minimumSplashTime, preloadingComplete]);
+    await Future.wait([
+      Future.delayed(const Duration(milliseconds: 1500)),
+      _waitForPreloadingComplete(),
+    ]);
 
-    await Future.delayed(const Duration(milliseconds: 200)); // Reduced from 400ms
-
-    // SPLASH IS DONE → Tell parent to go to MainAppScreen
+    await Future.delayed(const Duration(milliseconds: 200));
     widget.onSplashComplete?.call();
   }
 
@@ -130,7 +129,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Animated EZEYWAY Text
                   AnimatedBuilder(
                     animation: _logoController,
                     builder: (context, child) {
@@ -176,9 +174,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                       );
                     },
                   ),
-
                   const SizedBox(height: 16),
-
                   AnimatedOpacity(
                     opacity: _currentCharIndex >= _fullText.length ? 1.0 : 0.0,
                     duration: const Duration(milliseconds: 600),
@@ -195,8 +191,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                 ],
               ),
             ),
-
-            // Progress Bar + Loading Text
             AnimatedOpacity(
               opacity: _showContent ? 1.0 : 0.0,
               duration: const Duration(milliseconds: 600),
@@ -239,10 +233,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                 ),
               ),
             ),
-
             const SizedBox(height: 30),
-
-            // Version
             AnimatedOpacity(
               opacity: _showContent ? 1.0 : 0.0,
               duration: const Duration(milliseconds: 600),

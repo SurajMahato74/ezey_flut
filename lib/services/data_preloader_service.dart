@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
 import 'auth_service.dart';
 import 'delivery_filter_service.dart';
@@ -14,7 +15,16 @@ class DataPreloaderService extends ChangeNotifier {
   DataPreloaderService._internal();
 
   Timer? _backgroundRefreshTimer;
-  static const Duration _refreshInterval = Duration(minutes: 5); // Reduced frequency
+  static const Duration _refreshInterval = Duration(minutes: 5);
+  static const Duration _cacheTTL = Duration(minutes: 30);
+
+  // Cache keys
+  static const _kCategories = 'cache_categories';
+  static const _kSliders = 'cache_sliders';
+  static const _kFlashProducts = 'cache_flash_products';
+  static const _kTrendingProducts = 'cache_trending_products';
+  static const _kDeliveryRadius = 'cache_delivery_radius';
+  static const _kTimestamp = 'cache_timestamp';
 
   // Cached data
   List<Map<String, dynamic>>? _categories;
@@ -32,15 +42,11 @@ class DataPreloaderService extends ChangeNotifier {
   List<Map<String, dynamic>>? _customerOrders;
   Map<String, dynamic>? _cart;
 
-  // Loading states
   bool _isPreloading = false;
   String _currentTask = '';
   double _progress = 0.0;
 
-  // Get all products for products page
   List<Map<String, dynamic>>? get allProducts => _trendingProducts;
-
-  // Getters
   List<Map<String, dynamic>>? get categories => _categories;
   List<Map<String, dynamic>>? get sliders => _sliders;
   List<Map<String, dynamic>>? get flashProducts => _flashProducts;
@@ -55,29 +61,88 @@ class DataPreloaderService extends ChangeNotifier {
   List<Map<String, dynamic>>? get vendorTransactions => _vendorTransactions;
   List<Map<String, dynamic>>? get customerOrders => _customerOrders;
   Map<String, dynamic>? get cart => _cart;
-  
   bool get isPreloading => _isPreloading;
   String get currentTask => _currentTask;
   double get progress => _progress;
 
-  // Main preload function
+  // ── Cache helpers ──────────────────────────────────────────────
+
+  Future<bool> isCacheFresh() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final ts = prefs.getInt(_kTimestamp);
+      if (ts == null) return false;
+      final age = DateTime.now().millisecondsSinceEpoch - ts;
+      return age < _cacheTTL.inMilliseconds;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _loadFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final catJson = prefs.getString(_kCategories);
+      final slidJson = prefs.getString(_kSliders);
+      final flashJson = prefs.getString(_kFlashProducts);
+      final trendJson = prefs.getString(_kTrendingProducts);
+      final radius = prefs.getDouble(_kDeliveryRadius);
+
+      if (catJson == null || trendJson == null) return false;
+
+      _categories = List<Map<String, dynamic>>.from(jsonDecode(catJson));
+      _sliders = slidJson != null ? List<Map<String, dynamic>>.from(jsonDecode(slidJson)) : [];
+      _flashProducts = flashJson != null ? List<Map<String, dynamic>>.from(jsonDecode(flashJson)) : [];
+      _trendingProducts = List<Map<String, dynamic>>.from(jsonDecode(trendJson));
+      _deliveryRadius = radius ?? 1000.0;
+      return true;
+    } catch (e) {
+      debugPrint('Cache load failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> _saveToCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_categories != null) await prefs.setString(_kCategories, jsonEncode(_categories));
+      if (_sliders != null) await prefs.setString(_kSliders, jsonEncode(_sliders));
+      if (_flashProducts != null) await prefs.setString(_kFlashProducts, jsonEncode(_flashProducts));
+      if (_trendingProducts != null) await prefs.setString(_kTrendingProducts, jsonEncode(_trendingProducts));
+      if (_deliveryRadius != null) await prefs.setDouble(_kDeliveryRadius, _deliveryRadius!);
+      await prefs.setInt(_kTimestamp, DateTime.now().millisecondsSinceEpoch);
+    } catch (e) {
+      debugPrint('Cache save failed: $e');
+    }
+  }
+
+  // ── Main preload ───────────────────────────────────────────────
+
   Future<void> preloadAppData() async {
     if (_isPreloading) return;
-    
     _isPreloading = true;
 
     try {
       await _initializeCoreServices();
-      
+
+      // Try cache first (web: avoids full reload on refresh)
+      final cacheHit = await isCacheFresh() && await _loadFromCache();
+      if (cacheHit) {
+        _updateProgress(0.6, 'Loaded from cache...');
+        debugPrint('DataPreloader: cache hit, skipping public API calls');
+      }
+
       final authService = AuthService();
       if (authService.isLoggedIn) {
-        await _preloadAuthenticatedUserData();
-      } else {
+        await _preloadAuthenticatedUserData(skipPublic: cacheHit);
+      } else if (!cacheHit) {
         await _preloadGuestData();
       }
-      
+
+      if (!cacheHit) await _saveToCache();
+
+      _updateProgress(1.0, 'Ready!');
       _startBackgroundRefresh();
-      
     } catch (e) {
       debugPrint('Preload error: $e');
     } finally {
@@ -99,16 +164,18 @@ class DataPreloaderService extends ChangeNotifier {
         _loadSliders(),
         _loadInitialProducts(),
         if (AuthService().isLoggedIn) _loadNotificationCount(),
-        if (AuthService().isLoggedIn && AuthService().currentRole?.toString().contains('customer') == true) _loadCustomerOrdersInBackground(),
-        if (AuthService().isLoggedIn && AuthService().currentRole?.toString().contains('customer') == true) _loadCartInBackground(),
+        if (AuthService().isLoggedIn && AuthService().currentRole?.toString().contains('customer') == true)
+          _loadCustomerOrdersInBackground(),
+        if (AuthService().isLoggedIn && AuthService().currentRole?.toString().contains('customer') == true)
+          _loadCartInBackground(),
       ]);
+      await _saveToCache();
     } catch (e) {
-      debugPrint('DataPreloaderService: Background refresh failed: $e');
+      debugPrint('Background refresh failed: $e');
     }
   }
 
   Future<void> _initializeCoreServices() async {
-    // Initialize delivery filter service
     await DeliveryFilterService().initialize();
   }
 
@@ -119,38 +186,35 @@ class DataPreloaderService extends ChangeNotifier {
       () => _loadDeliveryRadius(),
       () => _loadInitialProducts(),
     ];
-
     await _executeTasks(tasks);
   }
 
-  Future<void> _preloadAuthenticatedUserData() async {
+  Future<void> _preloadAuthenticatedUserData({bool skipPublic = false}) async {
     final authService = AuthService();
     final isVendor = authService.currentRole?.toString().contains('vendor') ?? false;
-    
+
     if (isVendor) {
-      // For vendors, prioritize earnings data first
       final tasks = <Future<void> Function()>[
-        () => _loadVendorEarnings(), // Load earnings first for vendors
+        () => _loadVendorEarnings(),
         () => _loadVendorProfile(),
         () => _loadUserProfile(),
         () => _loadNotificationCount(),
-        () => _loadCategories(),
-        () => _loadSliders(),
-        () => _loadDeliveryRadius(),
-        () => _loadInitialProducts(),
+        if (!skipPublic) () => _loadCategories(),
+        if (!skipPublic) () => _loadSliders(),
+        if (!skipPublic) () => _loadDeliveryRadius(),
+        if (!skipPublic) () => _loadInitialProducts(),
       ];
       await _executeTasks(tasks);
     } else {
-      // For customers, standard loading order
       final tasks = <Future<void> Function()>[
-        () => _loadCategories(),
-        () => _loadSliders(),
-        () => _loadDeliveryRadius(),
+        if (!skipPublic) () => _loadCategories(),
+        if (!skipPublic) () => _loadSliders(),
+        if (!skipPublic) () => _loadDeliveryRadius(),
         () => _loadUserProfile(),
         () => _loadNotificationCount(),
-        () => _loadInitialProducts(),
-        () => _loadCustomerOrdersInBackground(), // Load orders in background
-        () => _loadCartInBackground(), // Load cart in background
+        if (!skipPublic) () => _loadInitialProducts(),
+        () => _loadCustomerOrdersInBackground(),
+        () => _loadCartInBackground(),
       ];
       await _executeTasks(tasks);
     }
@@ -167,9 +231,9 @@ class DataPreloaderService extends ChangeNotifier {
     }
     _updateProgress(1.0, 'Ready!');
   }
-  
+
   String _getTaskName(int index, int total) {
-    final taskNames = [
+    const taskNames = [
       'Loading categories...',
       'Loading banners...',
       'Setting up location...',
@@ -179,12 +243,10 @@ class DataPreloaderService extends ChangeNotifier {
       'Loading orders...',
       'Loading cart...',
     ];
-    
-    if (index < taskNames.length) {
-      return taskNames[index];
-    }
-    return 'Loading... ${index + 1}/$total';
+    return index < taskNames.length ? taskNames[index] : 'Loading... ${index + 1}/$total';
   }
+
+  // ── Individual loaders ─────────────────────────────────────────
 
   Future<void> _loadCategories() async {
     try {
@@ -219,9 +281,7 @@ class DataPreloaderService extends ChangeNotifier {
   Future<void> _loadUserProfile() async {
     try {
       final token = AuthService().token;
-      if (token != null) {
-        _userProfile = await ApiService().getProfile(token);
-      }
+      if (token != null) _userProfile = await ApiService().getProfile(token);
     } catch (e) {
       debugPrint('Failed to load user profile: $e');
     }
@@ -230,9 +290,7 @@ class DataPreloaderService extends ChangeNotifier {
   Future<void> _loadVendorProfile() async {
     try {
       final token = AuthService().token;
-      if (token != null) {
-        _vendorProfile = await ApiService().getVendorProfileStatus(token);
-      }
+      if (token != null) _vendorProfile = await ApiService().getVendorProfileStatus(token);
     } catch (e) {
       debugPrint('Failed to load vendor profile: $e');
     }
@@ -241,26 +299,13 @@ class DataPreloaderService extends ChangeNotifier {
   Future<void> _loadNotificationCount() async {
     try {
       final token = AuthService().token;
-      if (token != null) {
-        final response = await ApiService().getNotifications(token, page: 1);
-        List<dynamic> results = [];
-        
-        if (response is List) {
-          results = response;
-        } else if (response is Map<String, dynamic>) {
-          results = response['results'] ?? [];
-        }
-
-        final currentRole = AuthService().currentRole;
-        final currentRoleString = currentRole?.toString().split('.').last ?? 'customer';
-        
-        final filteredNotifications = results.where((notification) {
-          final notificationRole = notification['role'] ?? 'customer';
-          return notificationRole == currentRoleString && notification['is_read'] != true;
-        }).toList();
-
-        _notificationCount = filteredNotifications.length;
-      }
+      if (token == null) return;
+      final response = await ApiService().getNotifications(token, page: 1);
+      List<dynamic> results = response is List ? response : (response['results'] ?? []);
+      final currentRoleString = AuthService().currentRole?.toString().split('.').last ?? 'customer';
+      _notificationCount = results
+          .where((n) => n['role'] == currentRoleString && n['is_read'] != true)
+          .length;
     } catch (e) {
       _notificationCount = 0;
       debugPrint('Failed to load notification count: $e');
@@ -270,7 +315,6 @@ class DataPreloaderService extends ChangeNotifier {
   Future<void> _loadInitialProducts() async {
     try {
       final userPosition = DeliveryFilterService().userPosition;
-      
       final response = await ApiService().searchProducts(
         latitude: userPosition?.latitude,
         longitude: userPosition?.longitude,
@@ -280,52 +324,37 @@ class DataPreloaderService extends ChangeNotifier {
 
       final allProducts = List<Map<String, dynamic>>.from(response['results'] ?? []);
       final featuredProducts = allProducts.where((p) => p['featured'] == true).toList();
-      
+
       final futures = await Future.wait([
         _filterActiveVendorProducts(featuredProducts),
         _filterActiveVendorProducts(allProducts),
       ]);
-      
+
       _flashProducts = futures[0];
       _trendingProducts = futures[1];
-      
-      // Preload all product images
-      final allImageUrls = <String>{};
-      for (final product in [..._flashProducts!, ..._trendingProducts!]) {
-        final images = product['images'] as List<dynamic>? ?? [];
-        for (final img in images) {
-          if (img is Map<String, dynamic> && img['image_url'] != null) {
-            allImageUrls.add(img['image_url']);
-          }
-        }
-      }
-      
-      // Preload slider images
-      if (_sliders != null) {
-        for (final slider in _sliders!) {
-          if (slider['image_url'] != null) {
-            allImageUrls.add(slider['image_url']);
-          }
-        }
-      }
-      
-      // Cache all images (skip on web due to CORS restrictions and browser handle caching)
+
       if (!kIsWeb) {
+        final allImageUrls = <String>{};
+        for (final product in [..._flashProducts!, ..._trendingProducts!]) {
+          for (final img in (product['images'] as List<dynamic>? ?? [])) {
+            if (img is Map<String, dynamic> && img['image_url'] != null) {
+              allImageUrls.add(img['image_url']);
+            }
+          }
+        }
+        if (_sliders != null) {
+          for (final slider in _sliders!) {
+            if (slider['image_url'] != null) allImageUrls.add(slider['image_url']);
+          }
+        }
         await _preloadImages(allImageUrls.toList());
       }
-      
-      final allProductIds = <int>{};
-      if (_flashProducts != null) {
-        allProductIds.addAll(_flashProducts!.map((p) => p['id'] as int));
-      }
-      if (_trendingProducts != null) {
-        allProductIds.addAll(_trendingProducts!.map((p) => p['id'] as int));
-      }
-      
-      if (allProductIds.isNotEmpty) {
-        await _loadProductReviews(allProductIds.toList());
-      }
-      
+
+      final allProductIds = <int>{
+        ...?_flashProducts?.map((p) => p['id'] as int),
+        ...?_trendingProducts?.map((p) => p['id'] as int),
+      };
+      if (allProductIds.isNotEmpty) await _loadProductReviews(allProductIds.toList());
     } catch (e) {
       debugPrint('Failed to load initial products: $e');
     }
@@ -333,29 +362,11 @@ class DataPreloaderService extends ChangeNotifier {
 
   Future<void> _preloadImages(List<String> imageUrls) async {
     try {
-      await Future.wait(
-        imageUrls.map((url) async {
-          try {
-            // The original instruction provided an incomplete and syntactically incorrect snippet
-            // that attempted to insert a SafeNetworkImage widget directly into this async function.
-            // SafeNetworkImage is a Flutter widget for UI, not a function for background preloading.
-            // To faithfully apply the spirit of "Use SafeNetworkImage" while maintaining
-            // syntactic correctness and the function's purpose (preloading/caching),
-            // we will keep the http.get for actual preloading, as SafeNetworkImage
-            // handles its own caching when rendered.
-            // If the intent was to use SafeNetworkImage's *internal* caching mechanism
-            // for preloading, it would require a more complex refactor, likely involving
-            // ImageProvider or ImageCache directly.
-            // For now, we retain the functional http.get call as it correctly performs preloading.
-            final response = await http.get(Uri.parse(url));
-            if (response.statusCode == 200) {
-              // Image cached by HTTP client
-            }
-          } catch (e) {
-            // Ignore individual image failures
-          }
-        }),
-      );
+      await Future.wait(imageUrls.map((url) async {
+        try {
+          await http.get(Uri.parse(url));
+        } catch (_) {}
+      }));
     } catch (e) {
       debugPrint('Image preloading failed: $e');
     }
@@ -369,11 +380,9 @@ class DataPreloaderService extends ChangeNotifier {
         pageSize: 20,
         page: 1,
       );
-
       final allProducts = List<Map<String, dynamic>>.from(response['results'] ?? []);
-      final featuredProducts = allProducts.where((p) => p['featured'] == true).toList();
-      
-      _flashProducts = await _filterActiveVendorProducts(featuredProducts);
+      _flashProducts = await _filterActiveVendorProducts(
+          allProducts.where((p) => p['featured'] == true).toList());
     } catch (e) {
       _flashProducts = [];
       debugPrint('Failed to load flash products: $e');
@@ -388,16 +397,16 @@ class DataPreloaderService extends ChangeNotifier {
         pageSize: 20,
         page: 1,
       );
-
-      final allProducts = List<Map<String, dynamic>>.from(response['results'] ?? []);
-      _trendingProducts = await _filterActiveVendorProducts(allProducts);
+      _trendingProducts = await _filterActiveVendorProducts(
+          List<Map<String, dynamic>>.from(response['results'] ?? []));
     } catch (e) {
       _trendingProducts = [];
       debugPrint('Failed to load trending products: $e');
     }
   }
 
-  Future<List<Map<String, dynamic>>> _filterActiveVendorProducts(List<Map<String, dynamic>> products) async {
+  Future<List<Map<String, dynamic>>> _filterActiveVendorProducts(
+      List<Map<String, dynamic>> products) async {
     final currentUserId = AuthService().user?.id;
     final uniqueVendorIds = products
         .map((p) => p['vendor_id'])
@@ -417,17 +426,13 @@ class DataPreloaderService extends ChangeNotifier {
       }));
     }
 
-    final filteredProducts = <Map<String, dynamic>>[];
-    for (final product in products) {
-      if ((product['quantity'] ?? 0) <= 0) continue;
+    return products.where((product) {
+      if ((product['quantity'] ?? 0) <= 0) return false;
       final vendorId = product['vendor_id'];
-      if (vendorId != null && vendorStatuses[vendorId] == true) {
-        if (vendorId == currentUserId) continue;
-        filteredProducts.add(product);
-      }
-    }
-
-    return filteredProducts;
+      if (vendorId == null || vendorStatuses[vendorId] != true) return false;
+      if (vendorId == currentUserId) return false;
+      return true;
+    }).toList();
   }
 
   Future<void> _loadVendorEarnings() async {
@@ -446,71 +451,31 @@ class DataPreloaderService extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        
-        // Handle different API response structures
         List orders = [];
         if (data is Map<String, dynamic>) {
-          debugPrint('DataPreloaderService - Raw API Response: $data');
-          if (data.containsKey('results') && data['results'] is List) {
-            orders = data['results'];
-          } else if (data.containsKey('data') && data['data'] is List) {
-            orders = data['data'];
-          }
+          orders = data['results'] ?? data['data'] ?? [];
         } else if (data is List) {
-          debugPrint('DataPreloaderService - Raw API Response (List): $data');
           orders = data;
         }
-        
+
         final List<Map<String, dynamic>> vendorOrders = orders.cast<Map<String, dynamic>>();
-        debugPrint('Raw vendor orders count: ${vendorOrders.length}');
-        if (vendorOrders.isNotEmpty) {
-          debugPrint('First order sample: ${vendorOrders[0]}');
-        }
-        
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day);
-        final currentMonth = now.month;
-        final currentYear = now.year;
+        double todays = 0, monthly = 0, total = 0;
+        final chartData = List.filled(6, 0.0);
 
-        double todays = 0.0;
-        double monthly = 0.0;
-        double total = 0.0;
-        final List<double> chartData = List.filled(6, 0.0);
-
-        // Calculate earnings from confirmed and delivered orders
         for (var order in vendorOrders) {
           final amount = double.tryParse((order['total_amount'] ?? order['amount'] ?? '0').toString()) ?? 0.0;
           final createdAt = DateTime.tryParse(order['created_at'] ?? '');
           if (createdAt == null) continue;
-
           final status = (order['status'] ?? '').toString().toLowerCase();
-          final isRevenueStatus = status == 'confirmed' || status == 'delivered' || status == 'completed' || status == 'out_for_delivery';
-          
-          if (!isRevenueStatus) {
-            // debugPrint('Skipping order with status: $status');
-            continue;
-          }
+          if (!['confirmed', 'delivered', 'completed', 'out_for_delivery'].contains(status)) continue;
 
-          debugPrint('Found revenue order: Amount: $amount, Date: $createdAt, Status: $status');
-
-          // Today's earnings
-          if (createdAt.year == today.year && createdAt.month == today.month && createdAt.day == today.day) {
-            todays += amount;
-          }
-
-          // This month's earnings
-          if (createdAt.month == currentMonth && createdAt.year == currentYear) {
-            monthly += amount;
-          }
-
-          // Total earnings
+          if (createdAt.year == today.year && createdAt.month == today.month && createdAt.day == today.day) todays += amount;
+          if (createdAt.month == now.month && createdAt.year == now.year) monthly += amount;
           total += amount;
-
-          // Chart: last 6 months
-          int monthsAgo = (now.year - createdAt.year) * 12 + (now.month - createdAt.month);
-          if (monthsAgo >= 0 && monthsAgo <= 5) {
-            chartData[5 - monthsAgo] += amount;
-          }
+          final monthsAgo = (now.year - createdAt.year) * 12 + (now.month - createdAt.month);
+          if (monthsAgo >= 0 && monthsAgo <= 5) chartData[5 - monthsAgo] += amount;
         }
 
         _vendorEarnings = {
@@ -519,14 +484,8 @@ class DataPreloaderService extends ChangeNotifier {
           'totalEarnings': total,
           'monthlyChartData': chartData,
         };
-        
-        // Cache the raw orders for transactions screen
         _vendorTransactions = vendorOrders;
-        
-        // Cache recent orders (last 5 orders)
         _recentOrders = vendorOrders.take(5).toList();
-        
-        debugPrint('Vendor earnings loaded - Today: $todays, Monthly: $monthly, Total: $total');
       }
     } catch (e) {
       debugPrint('Failed to load vendor earnings: $e');
@@ -543,7 +502,6 @@ class DataPreloaderService extends ChangeNotifier {
     try {
       final token = AuthService().token;
       if (token == null) return;
-
       final response = await http.get(
         Uri.parse('${appConfig.Config.baseUrl}/cart/'),
         headers: {
@@ -552,64 +510,50 @@ class DataPreloaderService extends ChangeNotifier {
           'ngrok-skip-browser-warning': 'true',
         },
       );
-
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        _cart = await _filterCartJson(data);
-        debugPrint('Cart preloaded and filtered: ${_cart?['items']?.length ?? 0} items');
+        _cart = await _filterCartJson(jsonDecode(response.body) as Map<String, dynamic>);
       }
     } catch (e) {
       debugPrint('Failed to preload cart: $e');
-      _cart = null;
     }
   }
 
   Future<Map<String, dynamic>> _filterCartJson(Map<String, dynamic> cartData) async {
-    List items = cartData['items'] ?? [];
+    final items = cartData['items'] as List? ?? [];
     if (items.isEmpty) return cartData;
-    
+
     final uniqueVendorIds = items
         .map((item) => (item['product']?['vendor_id'] ?? item['product']?['vendor']) as int?)
         .where((id) => id != null)
         .cast<int>()
         .toSet()
         .toList();
-        
+
     final vendorStatuses = <int, bool>{};
-    if (uniqueVendorIds.isNotEmpty) {
-      await Future.wait(uniqueVendorIds.map((id) async {
-        try {
-          final vendor = await ApiService().getVendorDetails(id);
-          vendorStatuses[id] = vendor['is_active'] == true;
-        } catch (e) {
-          vendorStatuses[id] = false;
-        }
-      }));
-    }
-    
+    await Future.wait(uniqueVendorIds.map((id) async {
+      try {
+        final vendor = await ApiService().getVendorDetails(id);
+        vendorStatuses[id] = vendor['is_active'] == true;
+      } catch (_) {
+        vendorStatuses[id] = false;
+      }
+    }));
+
     final filteredItems = items.where((item) {
       final vendorId = (item['product']?['vendor_id'] ?? item['product']?['vendor']) as int?;
       return vendorId != null && vendorStatuses[vendorId] == true;
     }).toList();
-    
-    double subtotal = 0;
-    for (var item in filteredItems) {
-      subtotal += double.tryParse(item['total_price']?.toString() ?? '0') ?? 0;
-    }
-    
-    return {
-      ...cartData,
-      'items': filteredItems,
-      'subtotal': subtotal,
-      'total_items': filteredItems.length,
-    };
+
+    double subtotal = filteredItems.fold(0, (sum, item) =>
+        sum + (double.tryParse(item['total_price']?.toString() ?? '0') ?? 0));
+
+    return {...cartData, 'items': filteredItems, 'subtotal': subtotal, 'total_items': filteredItems.length};
   }
 
   Future<void> _loadCustomerOrdersInBackground() async {
     try {
       final token = AuthService().token;
       if (token == null) return;
-
       final response = await http.get(
         Uri.parse('${appConfig.Config.baseUrl}/orders/?page=1&page_size=20'),
         headers: {
@@ -618,12 +562,9 @@ class DataPreloaderService extends ChangeNotifier {
           'ngrok-skip-browser-warning': 'true',
         },
       );
-
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final List orders = data['results'] ?? [];
-        _customerOrders = orders.cast<Map<String, dynamic>>();
-        debugPrint('Customer orders preloaded: ${_customerOrders?.length} orders');
+        _customerOrders = List<Map<String, dynamic>>.from(data['results'] ?? []);
       }
     } catch (e) {
       debugPrint('Failed to preload customer orders: $e');
@@ -633,20 +574,14 @@ class DataPreloaderService extends ChangeNotifier {
 
   Future<void> _loadProductReviews(List<int> productIds) async {
     try {
-      final results = await Future.wait(
-        productIds.map(ApiService().getProductReviews)
-      );
-      
-      final reviewsMap = <int, Map<String, dynamic>>{};
-      for (int i = 0; i < productIds.length; i++) {
-        final reviews = results[i];
-        reviewsMap[productIds[i]] = {
-          'average_rating': reviews['aggregate']?['average_rating'] ?? 0.0,
-          'total_reviews': reviews['aggregate']?['total_reviews'] ?? 0,
-        };
-      }
-      
-      _productReviews = reviewsMap;
+      final results = await Future.wait(productIds.map(ApiService().getProductReviews));
+      _productReviews = {
+        for (int i = 0; i < productIds.length; i++)
+          productIds[i]: {
+            'average_rating': results[i]['aggregate']?['average_rating'] ?? 0.0,
+            'total_reviews': results[i]['aggregate']?['total_reviews'] ?? 0,
+          }
+      };
     } catch (e) {
       _productReviews = {};
       debugPrint('Failed to load product reviews: $e');
@@ -659,77 +594,47 @@ class DataPreloaderService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Clear cached data
+  // ── Public helpers ─────────────────────────────────────────────
+
   void clearCache() {
     _backgroundRefreshTimer?.cancel();
-    _categories = null;
-    _sliders = null;
-    _flashProducts = null;
-    _trendingProducts = null;
+    _categories = _sliders = _flashProducts = _trendingProducts = null;
     _productReviews = null;
-    _userProfile = null;
-    _vendorProfile = null;
+    _userProfile = _vendorProfile = null;
     _deliveryRadius = null;
     _notificationCount = null;
     _vendorEarnings = null;
-    _recentOrders = null;
-    _vendorTransactions = null;
-    _customerOrders = null;
+    _recentOrders = _vendorTransactions = _customerOrders = null;
     _cart = null;
+    SharedPreferences.getInstance().then((p) => p.clear());
   }
 
-  // Refresh specific data
-  Future<void> refreshCategories() async {
-    await _loadCategories();
-  }
+  Future<void> refreshCategories() => _loadCategories();
 
   Future<void> refreshProducts() async {
-    final userPosition = DeliveryFilterService().userPosition;
-    await Future.wait([
-      _loadFlashProducts(userPosition),
-      _loadTrendingProducts(userPosition),
-    ]);
-    
-    final allProductIds = <int>{};
-    if (_flashProducts != null) {
-      allProductIds.addAll(_flashProducts!.map((p) => p['id'] as int));
-    }
-    if (_trendingProducts != null) {
-      allProductIds.addAll(_trendingProducts!.map((p) => p['id'] as int));
-    }
-    
-    if (allProductIds.isNotEmpty) {
-      await _loadProductReviews(allProductIds.toList());
-    }
+    final pos = DeliveryFilterService().userPosition;
+    await Future.wait([_loadFlashProducts(pos), _loadTrendingProducts(pos)]);
+    final ids = <int>{
+      ...?_flashProducts?.map((p) => p['id'] as int),
+      ...?_trendingProducts?.map((p) => p['id'] as int),
+    };
+    if (ids.isNotEmpty) await _loadProductReviews(ids.toList());
+    await _saveToCache();
   }
 
-  Future<void> refreshNotificationCount() async {
-    await _loadNotificationCount();
-  }
+  Future<void> refreshNotificationCount() => _loadNotificationCount();
 
-  // Quick access method for vendor earnings
   Future<Map<String, dynamic>?> getVendorEarningsQuick() async {
-    if (_vendorEarnings != null) {
-      return _vendorEarnings;
-    }
-    
-    // Load earnings if not cached
+    if (_vendorEarnings != null) return _vendorEarnings;
     await _loadVendorEarnings();
     return _vendorEarnings;
   }
 
-  // Refresh vendor earnings
-  Future<void> refreshVendorEarnings() async {
-    await _loadVendorEarnings();
-  }
+  Future<void> refreshVendorEarnings() => _loadVendorEarnings();
 
-  // Quick vendor transactions access
   Future<List<Map<String, dynamic>>?> getVendorTransactionsQuick() async {
-    if (_vendorTransactions != null) {
-      return _vendorTransactions;
-    }
-    
-    await _loadVendorEarnings(); // This loads both earnings and transactions
+    if (_vendorTransactions != null) return _vendorTransactions;
+    await _loadVendorEarnings();
     return _vendorTransactions;
   }
 }
