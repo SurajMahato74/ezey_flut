@@ -10,7 +10,7 @@ class RefreshHelper {
     
     try {
       // Clear existing cache
-      preloader.clearCache();
+      await preloader.clearCache();
       
       // Reload fresh data
       await preloader.preloadAppData();

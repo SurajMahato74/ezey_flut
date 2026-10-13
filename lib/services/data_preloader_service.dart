@@ -6,13 +6,32 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
 import 'auth_service.dart';
-import 'delivery_filter_service.dart';
+import 'catalog_location_service.dart';
 import '../config.dart' as appConfig;
 
 class DataPreloaderService extends ChangeNotifier {
   static final DataPreloaderService _instance = DataPreloaderService._internal();
   factory DataPreloaderService() => _instance;
-  DataPreloaderService._internal();
+  DataPreloaderService._internal() {
+    _cacheSessionToken = AuthService().token;
+    AuthService().addListener(_onSessionChanged);
+  }
+  String? _cacheSessionToken;
+
+  void _onSessionChanged() {
+    if (_cacheSessionToken == AuthService().token) return;
+    _cacheSessionToken = AuthService().token;
+    _clearPrivateCache();
+    notifyListeners();
+  }
+
+  void _clearPrivateCache() {
+    _userProfile = _vendorProfile = null;
+    _notificationCount = null;
+    _vendorEarnings = null;
+    _recentOrders = _vendorTransactions = _customerOrders = null;
+    _cart = null;
+  }
 
   Timer? _backgroundRefreshTimer;
   static const Duration _refreshInterval = Duration(minutes: 5);
@@ -21,9 +40,8 @@ class DataPreloaderService extends ChangeNotifier {
   // Cache keys
   static const _kCategories = 'cache_categories';
   static const _kSliders = 'cache_sliders';
-  static const _kFlashProducts = 'cache_flash_products';
-  static const _kTrendingProducts = 'cache_trending_products';
-  static const _kDeliveryRadius = 'cache_delivery_radius';
+  static const _kFlashProducts = 'cache_flash_products_v2';
+  static const _kTrendingProducts = 'cache_trending_products_v2';
   static const _kTimestamp = 'cache_timestamp';
 
   // Cached data
@@ -34,7 +52,6 @@ class DataPreloaderService extends ChangeNotifier {
   Map<int, Map<String, dynamic>>? _productReviews;
   Map<String, dynamic>? _userProfile;
   Map<String, dynamic>? _vendorProfile;
-  double? _deliveryRadius;
   int? _notificationCount;
   Map<String, dynamic>? _vendorEarnings;
   List<Map<String, dynamic>>? _recentOrders;
@@ -54,7 +71,6 @@ class DataPreloaderService extends ChangeNotifier {
   Map<int, Map<String, dynamic>>? get productReviews => _productReviews;
   Map<String, dynamic>? get userProfile => _userProfile;
   Map<String, dynamic>? get vendorProfile => _vendorProfile;
-  double? get deliveryRadius => _deliveryRadius;
   int? get notificationCount => _notificationCount;
   Map<String, dynamic>? get vendorEarnings => _vendorEarnings;
   List<Map<String, dynamic>>? get recentOrders => _recentOrders;
@@ -86,7 +102,6 @@ class DataPreloaderService extends ChangeNotifier {
       final slidJson = prefs.getString(_kSliders);
       final flashJson = prefs.getString(_kFlashProducts);
       final trendJson = prefs.getString(_kTrendingProducts);
-      final radius = prefs.getDouble(_kDeliveryRadius);
 
       if (catJson == null || trendJson == null) return false;
 
@@ -94,7 +109,6 @@ class DataPreloaderService extends ChangeNotifier {
       _sliders = slidJson != null ? List<Map<String, dynamic>>.from(jsonDecode(slidJson)) : [];
       _flashProducts = flashJson != null ? List<Map<String, dynamic>>.from(jsonDecode(flashJson)) : [];
       _trendingProducts = List<Map<String, dynamic>>.from(jsonDecode(trendJson));
-      _deliveryRadius = radius ?? 1000.0;
       return true;
     } catch (e) {
       debugPrint('Cache load failed: $e');
@@ -109,7 +123,6 @@ class DataPreloaderService extends ChangeNotifier {
       if (_sliders != null) await prefs.setString(_kSliders, jsonEncode(_sliders));
       if (_flashProducts != null) await prefs.setString(_kFlashProducts, jsonEncode(_flashProducts));
       if (_trendingProducts != null) await prefs.setString(_kTrendingProducts, jsonEncode(_trendingProducts));
-      if (_deliveryRadius != null) await prefs.setDouble(_kDeliveryRadius, _deliveryRadius!);
       await prefs.setInt(_kTimestamp, DateTime.now().millisecondsSinceEpoch);
     } catch (e) {
       debugPrint('Cache save failed: $e');
@@ -119,6 +132,7 @@ class DataPreloaderService extends ChangeNotifier {
   // ── Main preload ───────────────────────────────────────────────
 
   Future<void> preloadAppData() async {
+    await AuthService().initialized;
     if (_isPreloading) return;
     _isPreloading = true;
 
@@ -176,14 +190,13 @@ class DataPreloaderService extends ChangeNotifier {
   }
 
   Future<void> _initializeCoreServices() async {
-    await DeliveryFilterService().initialize();
+    await CatalogLocationService().initialize();
   }
 
   Future<void> _preloadGuestData() async {
     final tasks = [
       () => _loadCategories(),
       () => _loadSliders(),
-      () => _loadDeliveryRadius(),
       () => _loadInitialProducts(),
     ];
     await _executeTasks(tasks);
@@ -201,7 +214,6 @@ class DataPreloaderService extends ChangeNotifier {
         () => _loadNotificationCount(),
         if (!skipPublic) () => _loadCategories(),
         if (!skipPublic) () => _loadSliders(),
-        if (!skipPublic) () => _loadDeliveryRadius(),
         if (!skipPublic) () => _loadInitialProducts(),
       ];
       await _executeTasks(tasks);
@@ -209,7 +221,6 @@ class DataPreloaderService extends ChangeNotifier {
       final tasks = <Future<void> Function()>[
         if (!skipPublic) () => _loadCategories(),
         if (!skipPublic) () => _loadSliders(),
-        if (!skipPublic) () => _loadDeliveryRadius(),
         () => _loadUserProfile(),
         () => _loadNotificationCount(),
         if (!skipPublic) () => _loadInitialProducts(),
@@ -269,19 +280,12 @@ class DataPreloaderService extends ChangeNotifier {
     }
   }
 
-  Future<void> _loadDeliveryRadius() async {
-    try {
-      _deliveryRadius = await ApiService().getGlobalDeliveryRadius();
-    } catch (e) {
-      _deliveryRadius = 1000.0;
-      debugPrint('Failed to load delivery radius: $e');
-    }
-  }
-
   Future<void> _loadUserProfile() async {
     try {
       final token = AuthService().token;
-      if (token != null) _userProfile = await ApiService().getProfile(token);
+      if (token == null) return;
+      final profile = await ApiService().getProfile(token);
+      if (AuthService().token == token) _userProfile = profile;
     } catch (e) {
       debugPrint('Failed to load user profile: $e');
     }
@@ -290,7 +294,9 @@ class DataPreloaderService extends ChangeNotifier {
   Future<void> _loadVendorProfile() async {
     try {
       final token = AuthService().token;
-      if (token != null) _vendorProfile = await ApiService().getVendorProfileStatus(token);
+      if (token == null) return;
+      final profile = await ApiService().getVendorProfileStatus(token);
+      if (AuthService().token == token) _vendorProfile = profile;
     } catch (e) {
       debugPrint('Failed to load vendor profile: $e');
     }
@@ -301,6 +307,7 @@ class DataPreloaderService extends ChangeNotifier {
       final token = AuthService().token;
       if (token == null) return;
       final response = await ApiService().getNotifications(token, page: 1);
+      if (AuthService().token != token) return;
       List<dynamic> results = response is List ? response : (response['results'] ?? []);
       final currentRoleString = AuthService().currentRole?.toString().split('.').last ?? 'customer';
       _notificationCount = results
@@ -314,19 +321,15 @@ class DataPreloaderService extends ChangeNotifier {
 
   Future<void> _loadInitialProducts() async {
     try {
-      final userPosition = DeliveryFilterService().userPosition;
       final response = await ApiService().searchProducts(
-        latitude: userPosition?.latitude,
-        longitude: userPosition?.longitude,
         pageSize: 50,
         page: 1,
       );
 
       final allProducts = List<Map<String, dynamic>>.from(response['results'] ?? []);
-      final featuredProducts = allProducts.where((p) => p['featured'] == true).toList();
 
       final futures = await Future.wait([
-        _filterActiveVendorProducts(featuredProducts),
+        ApiService().getFlashProducts(),
         _filterActiveVendorProducts(allProducts),
       ]);
 
@@ -374,17 +377,8 @@ class DataPreloaderService extends ChangeNotifier {
 
   Future<void> _loadFlashProducts(dynamic userPosition) async {
     try {
-      final response = await ApiService().searchProducts(
-        latitude: userPosition?.latitude,
-        longitude: userPosition?.longitude,
-        pageSize: 20,
-        page: 1,
-      );
-      final allProducts = List<Map<String, dynamic>>.from(response['results'] ?? []);
-      _flashProducts = await _filterActiveVendorProducts(
-          allProducts.where((p) => p['featured'] == true).toList());
+      _flashProducts = await ApiService().getFlashProducts();
     } catch (e) {
-      _flashProducts = [];
       debugPrint('Failed to load flash products: $e');
     }
   }
@@ -392,8 +386,6 @@ class DataPreloaderService extends ChangeNotifier {
   Future<void> _loadTrendingProducts(dynamic userPosition) async {
     try {
       final response = await ApiService().searchProducts(
-        latitude: userPosition?.latitude,
-        longitude: userPosition?.longitude,
         pageSize: 20,
         page: 1,
       );
@@ -449,6 +441,7 @@ class DataPreloaderService extends ChangeNotifier {
         },
       );
 
+      if (AuthService().token != token) return;
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         List orders = [];
@@ -510,8 +503,10 @@ class DataPreloaderService extends ChangeNotifier {
           'ngrok-skip-browser-warning': 'true',
         },
       );
+      if (AuthService().token != token) return;
       if (response.statusCode == 200) {
-        _cart = await _filterCartJson(jsonDecode(response.body) as Map<String, dynamic>);
+        final cart = await _filterCartJson(jsonDecode(response.body) as Map<String, dynamic>);
+        if (AuthService().token == token) _cart = cart;
       }
     } catch (e) {
       debugPrint('Failed to preload cart: $e');
@@ -562,6 +557,7 @@ class DataPreloaderService extends ChangeNotifier {
           'ngrok-skip-browser-warning': 'true',
         },
       );
+      if (AuthService().token != token) return;
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         _customerOrders = List<Map<String, dynamic>>.from(data['results'] ?? []);
@@ -596,23 +592,25 @@ class DataPreloaderService extends ChangeNotifier {
 
   // ── Public helpers ─────────────────────────────────────────────
 
-  void clearCache() {
+  Future<void> clearCache() async {
     _backgroundRefreshTimer?.cancel();
     _categories = _sliders = _flashProducts = _trendingProducts = null;
     _productReviews = null;
     _userProfile = _vendorProfile = null;
-    _deliveryRadius = null;
     _notificationCount = null;
     _vendorEarnings = null;
     _recentOrders = _vendorTransactions = _customerOrders = null;
     _cart = null;
-    SharedPreferences.getInstance().then((p) => p.clear());
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in [_kCategories, _kSliders, _kFlashProducts, _kTrendingProducts, _kTimestamp]) {
+      await prefs.remove(key);
+    }
   }
 
   Future<void> refreshCategories() => _loadCategories();
 
   Future<void> refreshProducts() async {
-    final pos = DeliveryFilterService().userPosition;
+    final pos = CatalogLocationService().userPosition;
     await Future.wait([_loadFlashProducts(pos), _loadTrendingProducts(pos)]);
     final ids = <int>{
       ...?_flashProducts?.map((p) => p['id'] as int),

@@ -1,3 +1,4 @@
+import '../services/login_navigation.dart';
 // lib/screens/login_screen.dart
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -8,11 +9,10 @@ import '../models/login_response.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
-import 'main_app_screen.dart';
 import 'signup_screen.dart';
+import 'main_app_screen.dart';
 import 'otp_verification_screen.dart';
 import 'privacy_policy_screen.dart';
-import 'vendor_profile_completion_screen.dart';
 import 'role_selection_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -66,6 +66,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _isSendingOtp = _selectedMethod == LoginMethod.otp && !_isOtpSent;
     });
 
+    final sessionRevision = AuthService().sessionRevision;
     try {
       if (_selectedMethod == LoginMethod.credentials) {
         // EMAIL + PASSWORD LOGIN
@@ -74,6 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
           _passwordController.text,
         );
 
+        if (AuthService().sessionRevision != sessionRevision) return;
         // Handle different response types
         if (result is Map<String, dynamic>) {
           // Email not verified → send to OTP screen
@@ -102,14 +104,11 @@ class _LoginScreenState extends State<LoginScreen> {
                 // Auto-agree to privacy policy
                 final loginResponse = await ApiService().agreeToPrivacyPolicy(userId);
                 
+                if (AuthService().sessionRevision != sessionRevision) return;
                 // Now complete the login with the token
-                await AuthService().saveLoginData(
-                  loginResponse.token!,
-                  loginResponse.user!,
-                  widget.role,
-                );
+                await AuthService().completeLogin(loginResponse, selectedRole: widget.role);
                 
-                _navigateToHome();
+                await _navigateToHome(loginResponse);
                 return;
               } catch (e) {
                 _showError('Login failed. Please try again.');
@@ -121,8 +120,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
         // Full successful login
         if (result is LoginResponse && result.isFullLogin) {
-          await AuthService().login(_emailController.text.trim(), _passwordController.text, selectedRole: widget.role);
-          _navigateToHome();
+          await AuthService().completeLogin(result, selectedRole: widget.role);
+          await _navigateToHome(result);
           return;
         }
       } 
@@ -141,8 +140,8 @@ class _LoginScreenState extends State<LoginScreen> {
           }
           
           // Verify OTP directly + Complete Login
-          await AuthService().loginWithOtp(email, _otpController.text, selectedRole: widget.role);
-          _navigateToHome();
+          final response = await AuthService().loginWithOtp(email, _otpController.text.trim(), selectedRole: widget.role);
+          await _navigateToHome(response);
         }
       }
     } on Exception catch (e) {
@@ -158,169 +157,10 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  void _navigateToHome() async {
+  Future<void> _navigateToHome(LoginResponse response) async {
     if (!mounted) return;
-
-    // If should not remove all routes, just pop back
-    if (!widget.shouldRemoveAllRoutes) {
-      Navigator.of(context).pop();
-      return;
-    }
-
-    // For vendors, check if profile exists and approval status
-    if (widget.role == UserRole.vendor) {
-      try {
-        final token = AuthService().token;
-        if (token != null) {
-          final profileStatus = await ApiService().getVendorProfileStatus(token);
-
-          if (profileStatus['exists'] == true) {
-            if (profileStatus['is_approved'] == true) {
-              // Profile exists and approved - go to main app
-              if (mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (_) => const MainAppScreen()),
-                  (route) => false,
-                );
-              }
-            } else if (profileStatus['is_rejected'] == true) {
-              // Profile rejected - show rejection message
-              if (mounted) {
-                showDialog(
-                  context: context,
-                  barrierDismissible: false,
-                  builder: (context) => AlertDialog(
-                    backgroundColor: const Color(0xFF1E1E1E),
-                    title: Text('Profile Rejected', style: GoogleFonts.plusJakartaSans(color: Colors.white, fontWeight: FontWeight.w700)),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.error, color: Colors.red, size: 60),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Your vendor profile has been rejected.',
-                          style: GoogleFonts.plusJakartaSans(color: Colors.white, fontSize: 15),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          profileStatus['rejection_reason'] ?? 'Please contact support for more details.',
-                          style: GoogleFonts.plusJakartaSans(color: const Color(0xFFA1A1AA), fontSize: 13),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () async {
-                          await AuthService().logout(context);
-                        },
-                        child: const Text('OK', style: TextStyle(color: AppTheme.primaryColor, fontWeight: FontWeight.w700)),
-                      ),
-                    ],
-                  ),
-                );
-              }
-            } else {
-              // Profile exists but not approved - show pending message
-              if (mounted) {
-                showDialog(
-                  context: context,
-                  barrierDismissible: false,
-                  builder: (context) => AlertDialog(
-                    backgroundColor: const Color(0xFF1E1E1E),
-                    title: Text('Pending Approval', style: GoogleFonts.plusJakartaSans(color: Colors.white, fontWeight: FontWeight.w700)),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.pending, color: Colors.orange, size: 60),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Your vendor profile is pending admin approval.',
-                          style: GoogleFonts.plusJakartaSans(color: Colors.white, fontSize: 15),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'You will be notified once approved. Please check back later.',
-                          style: GoogleFonts.plusJakartaSans(color: const Color(0xFFA1A1AA), fontSize: 13),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () async {
-                          await AuthService().logout(context);
-                        },
-                        child: const Text('OK', style: TextStyle(color: AppTheme.primaryColor, fontWeight: FontWeight.w700)),
-                      ),
-                    ],
-                  ),
-                );
-              }
-            }
-            return;
-          } else {
-            // Profile doesn't exist - go to completion
-            if (mounted) {
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const VendorProfileCompletionScreen()),
-                (route) => false,
-              );
-            }
-            return;
-          }
-        }
-      } catch (e) {
-        // Error checking profile - assume pending approval
-        if (mounted) {
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) => AlertDialog(
-              backgroundColor: const Color(0xFF1E1E1E),
-              title: Text('Pending Approval', style: GoogleFonts.plusJakartaSans(color: Colors.white, fontWeight: FontWeight.w700)),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.pending, color: Colors.orange, size: 60),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Your vendor profile is pending admin approval.',
-                    style: GoogleFonts.plusJakartaSans(color: Colors.white, fontSize: 15),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'You will be notified once approved. Please check back later.',
-                    style: GoogleFonts.plusJakartaSans(color: const Color(0xFFA1A1AA), fontSize: 13),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () async {
-                    await AuthService().logout(context);
-                  },
-                  child: const Text('OK', style: TextStyle(color: AppTheme.primaryColor, fontWeight: FontWeight.w700)),
-                ),
-              ],
-            ),
-          );
-        }
-        return;
-      }
-    }
-
-    // Default: go to home (for customers)
-    if (mounted) {
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const MainAppScreen()),
-        (route) => false,
-      );
-    }
+    await navigateAfterLogin(context, response, widget.role,
+        removeAllRoutes: widget.shouldRemoveAllRoutes);
   }
 
   void _showError(String msg) {
@@ -340,13 +180,21 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  void _skipToHome() {
-    AuthService().loginAsGuest(widget.role);
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const MainAppScreen()),
-      (route) => false,
-    );
+  Future<void> _skipToHome() async {
+    if (_isLoading) return;
+    final navigator = Navigator.of(context);
+    setState(() => _isLoading = true);
+    try {
+      await AuthService().loginAsGuest(UserRole.customer);
+      if (navigator.mounted) {
+        navigator.pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const MainAppScreen()), (_) => false);
+      }
+    } catch (error) {
+      _showError('Could not start guest mode: $error');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   void _navigateToSignup() {

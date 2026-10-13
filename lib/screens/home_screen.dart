@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
-import '../services/delivery_filter_service.dart';
+import '../services/catalog_location_service.dart';
 import '../services/location_service.dart';
 import '../services/data_preloader_service.dart';
 import '../services/navigation_service.dart';
@@ -42,12 +42,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoadingSliders = false;
   bool _isLoadingFlashProducts = false;
   bool _isLoadingTrendingProducts = false;
-  bool _isLoadingMoreFlash = false;
   bool _isLoadingMoreTrending = false;
 
-  bool _hasMoreFlashProducts = true;
   bool _hasMoreTrendingProducts = true;
-  int _flashProductsPage = 1;
   int _trendingProductsPage = 1;
 
   late final PageController _sliderController;
@@ -67,11 +64,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _sliderController = PageController(
-      viewportFraction: 0.8,
+      viewportFraction: 0.94, // Makes the slider take up almost the full width, leaving a tiny bit of the next slide visible
       initialPage: 1000,
     );
     _loadDataSynchronously();
-    _flashScrollController.addListener(_onFlashScroll);
     _trendingScrollController.addListener(_onTrendingScroll);
     _fetchNotificationCount();
   }
@@ -111,10 +107,10 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (preloader.categories == null) _fetchCategories();
       if (preloader.sliders == null) _fetchSliders();
-      if (preloader.flashProducts == null) _fetchFlashProducts();
+      _fetchFlashProducts(); // Revalidate even when the cached list is empty.
       if (preloader.trendingProducts == null) _fetchTrendingProducts();
       
-      DeliveryFilterService().initialize();
+      CatalogLocationService().initialize();
     });
   }
 
@@ -153,10 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _performSearch(String query) async {
     try {
-      final userPosition = DeliveryFilterService().userPosition;
       final response = await ApiService().searchProducts(
-        latitude: userPosition?.latitude,
-        longitude: userPosition?.longitude,
         search: query,
         pageSize: 50,
       );
@@ -233,16 +226,6 @@ class _HomeScreenState extends State<HomeScreen> {
         curve: Curves.easeInOut,
       );
     });
-  }
-
-  void _onFlashScroll() {
-    if (_flashScrollController.position.pixels >=
-            _flashScrollController.position.maxScrollExtent - 300 &&
-        !_isLoadingFlashProducts &&
-        !_isLoadingMoreFlash &&
-        _hasMoreFlashProducts) {
-      _fetchFlashProducts(loadMore: true);
-    }
   }
 
   void _onTrendingScroll() {
@@ -325,82 +308,25 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _fetchFlashProducts({bool loadMore = false}) async {
-    if (loadMore && !_hasMoreFlashProducts) return;
-    
-    if (!loadMore) {
-      setState(() => _isLoadingFlashProducts = true);
-      _isLoadingMoreFlash = false;
-    } else {
-      setState(() => _isLoadingMoreFlash = true);
-    }
-
+  Future<void> _fetchFlashProducts() async {
+    if (_isLoadingFlashProducts) return;
+    setState(() => _isLoadingFlashProducts = true);
     try {
-      final userPosition = DeliveryFilterService().userPosition;
-      final response = await ApiService().searchProducts(
-        latitude: userPosition?.latitude,
-        longitude: userPosition?.longitude,
-        pageSize: 20,
-        page: loadMore ? _flashProductsPage : 1,
-      );
-
-      final allProducts = List<Map<String, dynamic>>.from(response['results'] ?? []);
-      final featuredProducts = allProducts.where((p) => p['featured'] == true).toList();
-
-      final currentUserId = AuthService().user?.id;
-      final uniqueVendorIds = featuredProducts.map((p) => p['vendor_id']).where((id) => id != null).toSet().cast<int>();
-      final vendorStatuses = <int, bool>{};
-      if (uniqueVendorIds.isNotEmpty) {
-        await Future.wait(uniqueVendorIds.map((id) async {
-          try {
-            final vendor = await ApiService().getVendorDetails(id);
-            vendorStatuses[id] = vendor['is_active'] == true;
-          } catch (e) {
-            vendorStatuses[id] = false;
-          }
-        }));
-      }
-      final filteredProducts = <Map<String, dynamic>>[];
-      for (final product in featuredProducts) {
-        final vendorId = product['vendor_id'];
-        if (vendorId != null && vendorStatuses[vendorId] == true) {
-          if (vendorId == currentUserId) continue;
-          filteredProducts.add(product);
-        }
-      }
-
-      final productIds = filteredProducts
-          .map((p) => p['id'] as int)
-          .where((id) => !_productReviews.containsKey(id))
-          .toList();
-
-      if (productIds.isNotEmpty) await _loadReviewsForProducts(productIds);
-
+      final products = await ApiService().getFlashProducts();
+      if (!mounted) return;
+      setState(() => _flashProducts = products);
+      final ids = products.map((p) => p['id'] as int)
+          .where((id) => !_productReviews.containsKey(id)).toList();
+      if (ids.isNotEmpty) await _loadReviewsForProducts(ids);
+    } catch (_) {
       if (mounted) {
-        setState(() {
-        if (loadMore) {
-          _flashProducts.addAll(filteredProducts);
-          _flashProductsPage++;
-        } else {
-          _flashProducts = filteredProducts;
-          _productReviews.clear();
-        }
-        
-        // Stop pagination if no filtered products returned
-        _hasMoreFlashProducts = filteredProducts.isNotEmpty && response['next'] != null;
-        
-        _isLoadingFlashProducts = false;
-        _isLoadingMoreFlash = false;
-      });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Could not refresh Flash products. Please try again.'),
+          action: SnackBarAction(label: 'Retry', onPressed: _fetchFlashProducts),
+        ));
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-        _isLoadingFlashProducts = false;
-        _isLoadingMoreFlash = false;
-        if (!loadMore) _flashProducts = [];
-      });
-      }
+    } finally {
+      if (mounted) setState(() => _isLoadingFlashProducts = false);
     }
   }
 
@@ -415,10 +341,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
-      final userPosition = DeliveryFilterService().userPosition;
       final response = await ApiService().searchProducts(
-        latitude: userPosition?.latitude,
-        longitude: userPosition?.longitude,
         pageSize: 20,
         page: loadMore ? _trendingProductsPage : 1,
       );
@@ -581,13 +504,16 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             child: Row(
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.asset(
-                    'assets/images/ezeywaylogo.png',
-                    width: 50,
-                    height: 50,
-                    fit: BoxFit.contain,
+                Transform.scale(
+                  scale: 1.8,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.asset(
+                      'assets/images/ezeywaylogo.png',
+                      width: 50,
+                      height: 50,
+                      fit: BoxFit.contain,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -695,39 +621,47 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Container(
               height: 48,
               decoration: BoxDecoration(
-                color: const Color(0xFF27272A),
-                borderRadius: BorderRadius.circular(12),
+                color: const Color(0xFF18181B), // Slight solid background to mask anything behind it
+                border: Border.all(color: const Color(0xFF3F3F46), width: 1.5), // Clean border
+                borderRadius: BorderRadius.circular(24), // Fully pill-shaped / highly curved border
               ),
-              child: Row(
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16),
-                    child: Icon(Icons.search, color: Color(0xFFA1A1AA), size: 20),
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      onChanged: _onSearchChanged,
-                      decoration: InputDecoration(
-                        hintText: 'Search for products or vendors',
-                        hintStyle: GoogleFonts.plusJakartaSans(color: const Color(0xFFA1A1AA), fontSize: 16),
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 14),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(24), // Ensure inner elements don't bleed out of the curve
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchController,
+                        onChanged: _onSearchChanged,
+                        decoration: InputDecoration(
+                          hintText: 'Search for products or vendors',
+                          hintStyle: GoogleFonts.plusJakartaSans(color: const Color(0xFFA1A1AA), fontSize: 14), // slightly smaller text to fit
+                          border: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          errorBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          // Added left padding since we removed the front icon
+                          contentPadding: const EdgeInsets.only(left: 20, top: 14, bottom: 14), // increased left padding to match curve
+                        ),
+                        style: GoogleFonts.plusJakartaSans(color: Colors.white, fontSize: 14),
                       ),
-                      style: GoogleFonts.plusJakartaSans(color: Colors.white, fontSize: 16),
                     ),
-                  ),
-                  if (_searchController.text.isNotEmpty)
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Color(0xFFA1A1AA), size: 20),
-                      onPressed: _clearSearch,
-                    )
-                  else
-                    IconButton(
-                      icon: const Icon(Icons.image_search, color: Color(0xFFA1A1AA), size: 20),
-                      onPressed: () {}, // Image search placeholder
-                    ),
-                ],
+                    if (_searchController.text.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Color(0xFFA1A1AA), size: 20),
+                        onPressed: _clearSearch,
+                      )
+                    else
+                      IconButton(
+                        icon: const Icon(Icons.search, color: Color(0xFFA1A1AA), size: 20),
+                        onPressed: () {
+                          FocusScope.of(context).requestFocus();
+                        },
+                      ),
+                    const SizedBox(width: 4), // small padding on the right edge so icon isn't touching the curve
+                  ],
+                ),
               ),
             ),
           ),
@@ -740,7 +674,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     color: AppTheme.primaryColor,
                     backgroundColor: const Color(0xFF1E1E1E),
                     strokeWidth: 3,
-                    onRefresh: () => RefreshHelper.refreshAppData(context),
+                    onRefresh: () async {
+                      await RefreshHelper.refreshAppData(context);
+                      if (mounted) await _fetchFlashProducts();
+                    },
                     child: SingleChildScrollView(
                       physics: const AlwaysScrollableScrollPhysics(),
                       child: Column(
@@ -763,7 +700,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   itemBuilder: (context, index) {
                                     final slider = _sliders[index % _sliders.length];
                                     return Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                                      padding: const EdgeInsets.symmetric(horizontal: 4), // Reduced padding so it's not a massive gap
                                       child: _buildSliderCard(slider),
                                     );
                                   },
@@ -773,41 +710,68 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 24),
 
                   // Categories
-                  SizedBox(
-                    height: 80,
-                    child: _categories.isEmpty
-                        ? Center(
+                  _categories.isEmpty
+                      ? SizedBox(
+                          height: 80,
+                          child: Center(
                             child: Text(
                               'No categories available',
                               style: GoogleFonts.plusJakartaSans(color: Colors.white54, fontSize: 14),
                             ),
-                          )
-                        : ListView.builder(
-                            scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            itemCount: _categories.length,
-                            itemBuilder: (_, i) => _buildCategoryCircle(_categories[i]),
                           ),
-                  ),
+                        )
+                      : Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Wrap(
+                            spacing: 0, // No horizontal gap between items
+                            runSpacing: 0, // NO vertical gap between rows
+                            alignment: WrapAlignment.start,
+                            children: _categories.map((category) => _buildCategoryCircle(category)).toList(),
+                          ),
+                        ),
 
                   const SizedBox(height: 20),
+
+                  
 
                   // Flash Section
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      'Flash',
-                      style: GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Flash',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12, // Tiny text
+                            fontWeight: FontWeight.w600, // Not fully bold
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Container(
+                            height: 1, // Horizontal line (hr)
+                            color: Colors.white24,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(
+                          Icons.local_fire_department,
+                          color: Color(0xFFEF4444), // Red/Orange fire effect
+                          size: 16,
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8), // Much smaller gap
                   SizedBox(
-                    height: 280,
+                    height: 195, // Increased from 180 to 195 to prevent 15px bottom overflow of the text column
                     child: ListView.builder(
                         controller: _flashScrollController,
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        itemCount: _flashProducts.length + (_isLoadingMoreFlash ? 1 : 0),
+                        itemCount: _flashProducts.length + (_isLoadingFlashProducts ? 1 : 0),
                         itemBuilder: (context, index) {
                           if (index == _flashProducts.length) {
                             return const Padding(
@@ -824,6 +788,49 @@ class _HomeScreenState extends State<HomeScreen> {
                           );
                         },
                       ),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Promotional Offers Section
+                  SizedBox(
+                    height: 180,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      children: [
+                        _buildOfferCard(
+                          tag: 'Limited Offer',
+                          title: 'Spend \$50 to get\nFree Delivery',
+                          subtitle: 'Order anything today',
+                          buttonText: 'Shop Now',
+                          backgroundColor: const Color(0xFFFFF7ED),
+                          tagColor: const Color(0xFFEA580C),
+                          titleColor: const Color(0xFF1F2937),
+                          imageUrl: 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=400',
+                        ),
+                        _buildOfferCard(
+                          tag: 'Only This Week',
+                          title: '20% off on all\nFresh Produce',
+                          subtitle: 'Stay healthy & save',
+                          buttonText: 'Claim Offer',
+                          backgroundColor: const Color(0xFFF0FDF4),
+                          tagColor: const Color(0xFF16A34A),
+                          titleColor: const Color(0xFF1F2937),
+                          imageUrl: 'https://images.unsplash.com/photo-1610832958506-aa56368176cf?auto=format&fit=crop&q=80&w=400',
+                        ),
+                        _buildOfferCard(
+                          tag: 'Flash Deal',
+                          title: 'Unbeatable quality,\nunbeatable prices.',
+                          subtitle: 'Snacks & Beverages',
+                          buttonText: 'Shop Now',
+                          backgroundColor: const Color(0xFFF0F9FF),
+                          tagColor: const Color(0xFF0284C7),
+                          titleColor: const Color(0xFF1F2937),
+                          imageUrl: 'https://images.unsplash.com/photo-1621939514649-280e2ee25f60?auto=format&fit=crop&q=80&w=400',
+                        ),
+                      ],
+                    ),
                   ),
 
                   const SizedBox(height: 20),
@@ -900,7 +907,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
+        // Removed border radius for sharp rectangular edges
         image: imageUrl != null
             ? DecorationImage(image: NetworkImage(imageUrl), fit: BoxFit.cover)
             : null,
@@ -909,7 +916,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
+          // Removed border radius for sharp rectangular edges
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
@@ -937,41 +944,185 @@ class _HomeScreenState extends State<HomeScreen> {
     final iconUrl = category['icon'] as String?;
     final categoryId = category['id'];
 
+    // Screen width - 32px (for the 16px padding on left/right) divided by exactly 5
+    final screenWidth = MediaQuery.of(context).size.width;
+    final boxWidth = (screenWidth - 32) / 5;
+
     return GestureDetector(
       onTap: () {
         final navigationService = Provider.of<NavigationService>(context, listen: false);
         navigationService.navigateToCategory(categoryId);
       },
       child: Container(
-        width: 60,
-        margin: const EdgeInsets.only(right: 12),
+        width: boxWidth, // Dynamically set to exactly 1/5th of available screen width
+        decoration: BoxDecoration(
+          color: Colors.transparent, // Fully transparent background inside the category box
+          border: Border.all(color: const Color(0xFF2A2A2A), width: 0.5), // Faint separator border
+        ),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: const BoxDecoration(color: Color(0xFF27272A), shape: BoxShape.circle),
-              child: ClipOval(
-                child: iconUrl != null && iconUrl.isNotEmpty && !iconUrl.toLowerCase().endsWith('.avif')
-                    ? Image.network(
-                        iconUrl,
-                        fit: BoxFit.cover,
-                        loadingBuilder: (_, child, progress) => progress == null ? child : const Icon(Icons.category, color: Colors.grey),
-                        errorBuilder: (_, __, ___) => const Icon(Icons.category, color: AppTheme.primaryColor, size: 18),
-                      )
-                    : const Icon(Icons.category, color: AppTheme.primaryColor, size: 18),
+            const SizedBox(height: 12), // Top padding inside the box
+            SizedBox(
+              width: 35,
+              height: 35,
+              child: iconUrl != null && iconUrl.isNotEmpty && !iconUrl.toLowerCase().endsWith('.avif')
+                  ? Image.network(
+                      iconUrl,
+                      fit: BoxFit.contain,
+                      loadingBuilder: (_, child, progress) => progress == null ? child : const Icon(Icons.category, color: Colors.grey, size: 20),
+                      errorBuilder: (_, __, ___) => const Icon(Icons.category, color: AppTheme.primaryColor, size: 20),
+                    )
+                  : const Icon(Icons.category, color: AppTheme.primaryColor, size: 20),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2.0),
+              child: Text(
+                name,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 10, // Made text readable while still small
+                  color: Colors.white,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              name,
-              style: GoogleFonts.plusJakartaSans(fontSize: 9, color: Colors.white),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
+            const SizedBox(height: 12), // Bottom padding inside the box
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildOfferCard({
+    required String tag,
+    required String title,
+    required String subtitle,
+    required String buttonText,
+    required Color backgroundColor,
+    required Color tagColor,
+    required Color titleColor,
+    required String imageUrl,
+  }) {
+    return Container(
+      width: 320, // Wide horizontal card
+      margin: const EdgeInsets.only(right: 16),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Stack(
+        children: [
+          // Background Image (positioned on the right)
+          Positioned(
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 140,
+            child: ClipRRect(
+              borderRadius: const BorderRadius.only(
+                topRight: Radius.circular(12),
+                bottomRight: Radius.circular(12),
+              ),
+              child: Image.network(
+                imageUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(color: Colors.grey[300]),
+              ),
+            ),
+          ),
+          
+          // Gradient fade from left to right so text is readable over the image
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [
+                    backgroundColor,
+                    backgroundColor.withOpacity(0.9),
+                    backgroundColor.withOpacity(0.1),
+                    Colors.transparent,
+                  ],
+                  stops: const [0.0, 0.45, 0.65, 1.0],
+                ),
+              ),
+            ),
+          ),
+
+          // Text Content
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  tag,
+                  style: GoogleFonts.plusJakartaSans(
+                    color: tagColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  title,
+                  style: GoogleFonts.plusJakartaSans(
+                    color: titleColor,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
+                    height: 1.2,
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  subtitle,
+                  style: GoogleFonts.plusJakartaSans(
+                    color: titleColor.withOpacity(0.6),
+                    fontSize: 12,
+                  ),
+                ),
+                const Spacer(),
+                // Beautiful Pill Button
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        buttonText,
+                        style: GoogleFonts.plusJakartaSans(
+                          color: titleColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Icon(Icons.arrow_forward, size: 14, color: titleColor),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -982,10 +1133,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final primaryImage = productImages.firstWhere((img) => img['is_primary'] == true, orElse: () => productImages.isNotEmpty ? productImages.first : {'image_url': ''});
     final imageUrl = primaryImage['image_url'] as String? ?? '';
 
-    final distance = DeliveryFilterService().userPosition != null
+    final distance = CatalogLocationService().userPosition != null
         ? '${LocationService().calculateDistance(
-            DeliveryFilterService().userPosition!.latitude,
-            DeliveryFilterService().userPosition!.longitude,
+            CatalogLocationService().userPosition!.latitude,
+            CatalogLocationService().userPosition!.longitude,
             product['vendor_latitude'] ?? 0.0,
             product['vendor_longitude'] ?? 0.0,
           ).toStringAsFixed(1)} km'
@@ -1024,74 +1175,40 @@ class _HomeScreenState extends State<HomeScreen> {
         ));
       },
       child: Container(
-        width: 160,
-        decoration: BoxDecoration(color: const Color(0xFF18181B), borderRadius: BorderRadius.circular(12)),
+        width: 140, // Made slightly narrower
+        decoration: const BoxDecoration(
+          color: Color(0xFF18181B), 
+          // Removed border radius here
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             Stack(
               children: [
-                ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-                  child: Image.network(
-                    imageUrl,
+                Image.network(
+                  imageUrl,
+                  height: 120,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  loadingBuilder: (_, child, progress) => progress == null
+                      ? Container(color: Colors.white, child: child)
+                      : Container(
+                          height: 120,
+                          width: double.infinity,
+                          color: const Color(0xFF27272A),
+                          child: const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
+                        ),
+                  errorBuilder: (_, __, ___) => Container(
                     height: 120,
                     width: double.infinity,
-                    fit: BoxFit.cover,
-                    loadingBuilder: (_, child, progress) => progress == null
-                        ? Container(color: Colors.white, child: child)
-                        : Container(
-                            height: 120,
-                            width: double.infinity,
-                            color: const Color(0xFF27272A),
-                            child: const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
-                          ),
-                    errorBuilder: (_, __, ___) => Container(
-                      height: 120,
-                      width: double.infinity,
-                      color: const Color(0xFF27272A),
-                      padding: const EdgeInsets.all(16.0),
-                      child: Image.asset('assets/images/ezeywaylogo.png',
-                          fit: BoxFit.contain),
-                    ),
+                    color: const Color(0xFF27272A),
+                    padding: const EdgeInsets.all(16.0),
+                    child: Image.asset('assets/images/ezeywaylogo.png',
+                        fit: BoxFit.contain),
                   ),
                 ),
-                 // Overlay Cart & Buy Buttons
-                 Positioned(
-                  bottom: 8, 
-                  right: 8, 
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                       GestureDetector(
-                        onTap: () => _addToCart(productId ?? 0),
-                        child: Container(
-                           width: 28,
-                           height: 28,
-                           decoration: BoxDecoration(
-                             color: Colors.black.withOpacity(0.7),
-                             shape: BoxShape.circle,
-                           ),
-                           child: const Icon(Icons.shopping_cart, color: AppTheme.primaryColor, size: 14),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: () => _buyNow(product),
-                        child: Container(
-                           width: 28,
-                           height: 28,
-                           decoration: const BoxDecoration(
-                             color: AppTheme.primaryColor,
-                             shape: BoxShape.circle, 
-                           ),
-                           child: const Icon(Icons.shopping_bag, color: Colors.black, size: 14),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                // Removed the overlay Cart & Buy Buttons completely from Flash Card
               ],
             ),
             Flexible(
@@ -1101,13 +1218,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                        Text(
-                          product['vendor_name'] ?? 'Unknown Vendor',
-                          style: GoogleFonts.plusJakartaSans(fontSize: 10, color: const Color(0xFFA1A1AA)),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
+                        // Removed vendor name
                         Text(
                           product['name'] ?? 'Unknown Product',
                           style: GoogleFonts.plusJakartaSans(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w700),
@@ -1115,14 +1226,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 4),
-                        // Rating and Sold Count
+                        // Rating and Sold Count ONLY
                         Row(
                           children: [
-                            const Icon(Icons.star, color: AppTheme.primaryColor, size: 12),
-                            const SizedBox(width: 4),
+                            const Icon(Icons.star, color: AppTheme.primaryColor, size: 10),
+                            const SizedBox(width: 2),
                             Text(rating, style: GoogleFonts.plusJakartaSans(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w600)),
-                             const SizedBox(width: 8),
-                             const Icon(Icons.local_fire_department, color: Color(0xFFFF5252), size: 12),
+                             const SizedBox(width: 6),
+                             const Icon(Icons.local_fire_department, color: Color(0xFFFF5252), size: 10),
                              const SizedBox(width: 2),
                              Expanded(
                                child: Text(
@@ -1133,21 +1244,8 @@ class _HomeScreenState extends State<HomeScreen> {
                              ),
                           ],
                         ),
+                        // Removed delivery info and km distance completely
                         const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            const Icon(Icons.directions_car, color: AppTheme.primaryColor, size: 12),
-                            const SizedBox(width: 4),
-                            Text(deliveryText, style: GoogleFonts.plusJakartaSans(fontSize: 10, color: Colors.white)),
-                            const SizedBox(width: 6),
-                            const Text('•', style: TextStyle(color: Color(0xFFA1A1AA), fontSize: 10)),
-                            const SizedBox(width: 6),
-                            const Icon(Icons.location_on, color: Color(0xFFA1A1AA), size: 12),
-                            const SizedBox(width: 4),
-                            Expanded(child: Text(distance, style: GoogleFonts.plusJakartaSans(fontSize: 10, color: const Color(0xFFA1A1AA)), overflow: TextOverflow.ellipsis)),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
                         Text(
                           'NPR ${(double.tryParse(product['price']?.toString() ?? '0') ?? 0).toInt()}',
                           style: GoogleFonts.plusJakartaSans(fontSize: 14, color: Colors.white, fontWeight: FontWeight.w700),
@@ -1169,10 +1267,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final primaryImage = productImages.firstWhere((img) => img['is_primary'] == true, orElse: () => productImages.isNotEmpty ? productImages.first : {'image_url': ''});
     final imageUrl = primaryImage['image_url'] as String? ?? '';
 
-    final distance = DeliveryFilterService().userPosition != null
+    final distance = CatalogLocationService().userPosition != null
         ? '${LocationService().calculateDistance(
-            DeliveryFilterService().userPosition!.latitude,
-            DeliveryFilterService().userPosition!.longitude,
+            CatalogLocationService().userPosition!.latitude,
+            CatalogLocationService().userPosition!.longitude,
             product['vendor_latitude'] ?? 0.0,
             product['vendor_longitude'] ?? 0.0,
           ).toStringAsFixed(1)} km'
@@ -1547,3 +1645,4 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+

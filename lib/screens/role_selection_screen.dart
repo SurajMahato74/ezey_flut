@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../models/user_role.dart';
+import 'package:provider/provider.dart';
+import '../services/auth_service.dart';
 import 'login_screen.dart';
+import 'main_app_screen.dart';
 
 class RoleSelectionScreen extends StatefulWidget {
   const RoleSelectionScreen({super.key});
@@ -13,6 +16,30 @@ class RoleSelectionScreen extends StatefulWidget {
 
 class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
   UserRole? _selectedRole;
+  bool _isContinuing = false;
+
+  Future<void> _continue() async {
+    final role = _selectedRole;
+    if (role == null || _isContinuing) return;
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _isContinuing = true);
+    try {
+      if (role == UserRole.customer) {
+        await Provider.of<AuthService>(context, listen: false).loginAsGuest(role);
+        if (navigator.mounted) {
+          navigator.pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const MainAppScreen()), (_) => false);
+        }
+      } else {
+        await navigator.push(MaterialPageRoute(builder: (_) => LoginScreen(role: role)));
+      }
+    } catch (error) {
+      if (messenger.mounted) messenger.showSnackBar(SnackBar(content: Text('Could not continue: $error')));
+    } finally {
+      if (mounted) setState(() => _isContinuing = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -72,7 +99,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                 children: [
                   // Customer Role Card
                   GestureDetector(
-                    onTap: () {
+                    onTap: _isContinuing ? null : () {
                       setState(() {
                         _selectedRole = UserRole.customer;
                       });
@@ -139,7 +166,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                   
                   // Vendor Role Card
                   GestureDetector(
-                    onTap: () {
+                    onTap: _isContinuing ? null : () {
                       setState(() {
                         _selectedRole = UserRole.vendor;
                       });
@@ -208,23 +235,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
               
               // Continue Button
               ElevatedButton(
-                onPressed: _selectedRole != null
-                    ? () {
-                        if (_selectedRole == UserRole.customer) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => const LoginScreen(role: UserRole.customer),
-                            ),
-                          );
-                        } else if (_selectedRole == UserRole.vendor) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => const LoginScreen(role: UserRole.vendor),
-                            ),
-                          );
-                        }
-                      }
-                    : null,
+                onPressed: _selectedRole != null && !_isContinuing ? _continue : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.primaryColor,
                   foregroundColor: Colors.black,
@@ -235,13 +246,23 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                   disabledBackgroundColor: const Color(0xFF27272A),
                   disabledForegroundColor: const Color(0xFFA1A1AA),
                 ),
-                child: Text(
-                  'Continue',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+                child: _isContinuing
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: AppTheme.primaryColor,
+                          semanticsLabel: 'Continuing',
+                        ),
+                      )
+                    : Text(
+                        'Continue',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
               ),
               
               const SizedBox(height: 16),

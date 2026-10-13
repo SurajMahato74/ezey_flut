@@ -1,3 +1,4 @@
+import '../services/account_switch_navigation.dart';
 // lib/screens/main_app_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -68,7 +69,7 @@ class _MainAppScreenState extends State<MainAppScreen> with RestorationMixin {
   }
 
   void _switchRole() {
-    _authService.switchRole();
+    switchAccountMode(context, UserRole.vendor);
   }
 
   @override

@@ -6,8 +6,7 @@ import 'package:provider/provider.dart';
 import '../models/user_role.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
-import 'main_app_screen.dart';
-import 'vendor_profile_completion_screen.dart';
+import '../services/login_navigation.dart';
 
 class OTPVerificationScreen extends StatefulWidget {
   final String email;
@@ -40,31 +39,11 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
     try {
       final authService = Provider.of<AuthService>(context, listen: false);
 
-      // This will handle both normal login and PRIVACY_AGREEMENT_REQUIRED case
-      await authService.loginWithOtp(widget.email, _otpController.text.trim());
-
-      // If we reach here → login successful (privacy already agreed or not required)
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login successful!'), backgroundColor: Colors.green),
+      final response = await authService.loginWithOtp(
+        widget.email, _otpController.text.trim(), selectedRole: widget.userType,
       );
-
-      // Navigate to main app screen - it handles role-based routing
       if (!mounted) return;
-      
-      // Check if vendor needs profile completion
-      if (authService.needsVendorProfileCompletion(widget.userType)) {
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const VendorProfileCompletionScreen()),
-          (route) => false,
-        );
-      } else {
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const MainAppScreen()),
-          (route) => false,
-        );
-      }
+      await navigateAfterLogin(context, response, widget.userType);
     } on Exception catch (e) {
       if (!mounted) return;
 

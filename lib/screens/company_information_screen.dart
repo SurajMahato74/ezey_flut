@@ -24,7 +24,6 @@ class _CompanyInformationScreenState extends State<CompanyInformationScreen> wit
   // Form controllers
   final TextEditingController _businessNameController = TextEditingController();
   final TextEditingController _ownerNameController = TextEditingController();
-  final TextEditingController _deliveryRadiusController = TextEditingController();
   final TextEditingController _minOrderController = TextEditingController();
   
   List<String> _selectedCategories = [];
@@ -54,7 +53,6 @@ class _CompanyInformationScreenState extends State<CompanyInformationScreen> wit
     _tabController.dispose();
     _businessNameController.dispose();
     _ownerNameController.dispose();
-    _deliveryRadiusController.dispose();
     _minOrderController.dispose();
     super.dispose();
   }
@@ -121,7 +119,6 @@ class _CompanyInformationScreenState extends State<CompanyInformationScreen> wit
     
     _businessNameController.text = _vendorData!['business_name'] ?? '';
     _ownerNameController.text = _vendorData!['owner_name'] ?? '';
-    _deliveryRadiusController.text = _vendorData!['delivery_radius']?.toString() ?? '';
     _minOrderController.text = _vendorData!['min_order_amount']?.toString() ?? '';
     
     _selectedCategories = List<String>.from(_vendorData!['categories'] ?? []);
@@ -151,7 +148,6 @@ class _CompanyInformationScreenState extends State<CompanyInformationScreen> wit
       final updateData = {
         'business_name': _businessNameController.text,
         'owner_name': _ownerNameController.text,
-        'delivery_radius': double.tryParse(_deliveryRadiusController.text),
         'min_order_amount': _minOrderController.text,
         'categories': _selectedCategories,
       };
@@ -403,7 +399,6 @@ class _CompanyInformationScreenState extends State<CompanyInformationScreen> wit
           const SizedBox(height: 16),
           _buildTextField('Owner Name', _ownerNameController),
           const SizedBox(height: 16),
-          _buildTextField('Delivery Radius (km)', _deliveryRadiusController),
           const SizedBox(height: 16),
           _buildTextField('Minimum Order Amount', _minOrderController),
           const SizedBox(height: 24),

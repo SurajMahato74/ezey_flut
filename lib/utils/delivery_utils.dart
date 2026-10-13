@@ -72,11 +72,6 @@ Map<String, dynamic> getDeliveryInfo(Map<String, dynamic> product, double? vendo
   };
 }
 
-double? getDeliveryRadiusSync(Map<String, dynamic> item) {
-  // Assuming the item has delivery_radius field, default to 100 km if not present
-  return item['delivery_radius']?.toDouble() ?? 100.0;
-}
-
 double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
   const double R = 6371000; // Earth's radius in meters
   double toRad(double deg) => deg * (math.pi / 180);

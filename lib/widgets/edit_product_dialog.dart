@@ -1,3 +1,4 @@
+import 'featured_product_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -484,6 +485,11 @@ class _EditProductDialogState extends State<EditProductDialog> {
                     _buildPricingSection(),
                     const SizedBox(height: 24),
                     _buildImagesSection(),
+                    const SizedBox(height: 24),
+                    FeaturedProductPanel(
+                      productId: widget.product['id'] as int,
+                      featured: widget.product['featured'] == true,
+                    ),
                     const SizedBox(height: 24),
                     _buildDetailsSection(),
                     const SizedBox(height: 24),

@@ -6,6 +6,11 @@ import '../config.dart';
 import '../models/login_response.dart';
 import 'package:image_picker/image_picker.dart';
 
+class SessionExpiredException implements Exception {
+  @override
+  String toString() => 'Your session has expired. Please sign in again.';
+}
+
 class ApiService {
   static final ApiService _instance = ApiService._internal();
   factory ApiService() => _instance;
@@ -200,17 +205,53 @@ class ApiService {
     }
   }
 
+  Exception _accountRequestError(http.Response response, String action) {
+    String? reason;
+    try {
+      final data = jsonDecode(response.body);
+      if (data is Map) {
+        reason = (data['error'] ?? data['detail'] ?? data['message'])?.toString();
+      }
+    } on FormatException {
+      // Proxies may return HTML instead of JSON. Do not display that page.
+    }
+    if (response.statusCode == 401 ||
+        (response.statusCode == 403 && (reason?.toLowerCase().contains('token') == true || reason?.toLowerCase().contains('credentials') == true))) {
+      return SessionExpiredException();
+    }
+    return Exception('$action (HTTP ${response.statusCode}): ${reason ?? 'The server could not complete the request. Please try again.'}');
+  }
+
+  Future<Map<String, dynamic>> switchAccountRole(String token, String role) async {
+    final response = await http.post(
+      Uri.parse('${Config.baseUrl}/switch-role/'),
+      headers: {
+        'Authorization': 'Token $token',
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: jsonEncode({'role': role}),
+    ).timeout(const Duration(seconds: 30));
+    if (response.statusCode != 200) {
+      throw _accountRequestError(response, 'Could not switch to $role');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body));
+  }
+
   // 7. GET VENDOR PROFILE STATUS
   Future<Map<String, dynamic>> getVendorProfileStatus(String token) async {
     final url = Uri.parse(Config.vendorProfilesEndpoint);
     final response = await http.get(url, headers: {
       'Authorization': 'Token $token',
       'Content-Type': 'application/json',
-    });
+    }).timeout(const Duration(seconds: 30));
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-      final list = data['results'] as List<dynamic>;
+      final list = data is List ? data : data['results'];
+      if (list is! List) {
+        throw Exception('Could not confirm your vendor profile. Please try again.');
+      }
       if (list.isEmpty) return {'exists': false};
       final profile = list[0];
       return {
@@ -224,7 +265,7 @@ class ApiService {
         'is_active': profile['is_active'] ?? false,
       };
     }
-    return {'exists': false};
+    throw _accountRequestError(response, 'Could not check your vendor profile');
   }
 
   // 8. GET USER PROFILE
@@ -232,27 +273,12 @@ class ApiService {
     final response = await http.get(
       Uri.parse(Config.profileEndpoint),
       headers: {'Authorization': 'Token $token'},
-    );
+    ).timeout(const Duration(seconds: 15));
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
     }
-    throw Exception('Failed to load profile');
+    throw _accountRequestError(response, 'Could not verify your session');
   }
-
-  // 9. GET DELIVERY RADIUS
-  Future<Map<String, dynamic>> getDeliveryRadius(String token) async {
-    final response = await http.get(
-      Uri.parse(Config.deliveryRadiusEndpoint),
-      headers: {'Authorization': 'Token $token'},
-    );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    }
-    throw Exception('Failed to load delivery radius');
-  }
-
-
-  
 
   Future<Map<String, dynamic>> completeVendorOnboarding({
     required String token,
@@ -316,7 +342,7 @@ class ApiService {
       await http.post(
         Uri.parse(Config.logoutEndpoint),
         headers: {'Authorization': 'Token $token'},
-      );
+      ).timeout(const Duration(seconds: 10));
       return true;
     } catch (e) {
       return true; // Always allow local logout
@@ -354,25 +380,8 @@ class ApiService {
     }
   }
 
-  // 14. GET GLOBAL DELIVERY RADIUS (no auth required)
-  Future<double> getGlobalDeliveryRadius() async {
-    final response = await http.get(Uri.parse(Config.deliveryRadiusEndpoint));
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      if (data['delivery_radius'] != null) {
-        return double.tryParse(data['delivery_radius'].toString()) ?? 1000.0;
-      }
-      throw Exception('Invalid response format');
-    } else {
-      throw Exception('Failed to load delivery radius');
-    }
-  }
-
   // 15. SEARCH PRODUCTS (updated to match React sample)
   Future<Map<String, dynamic>> searchProducts({
-    double? latitude,
-    double? longitude,
     int pageSize = 20,
     int page = 1,
     String? search,
@@ -382,8 +391,6 @@ class ApiService {
     final queryParams = {
       'page_size': pageSize.toString(),
       'page': page.toString(),
-      if (latitude != null) 'latitude': latitude.toString(),
-      if (longitude != null) 'longitude': longitude.toString(),
       if (search != null && search.isNotEmpty) 'search': search,
       if (sort != null && sort.isNotEmpty) 'sort': sort,
       if (categories != null && categories.isNotEmpty) 'categories': categories.join(','),
@@ -401,10 +408,36 @@ class ApiService {
     }
   }
 
+  /// Flash includes every featured product in the public catalog. The server
+  /// already applies product/vendor visibility; do not recheck vendors using
+  /// authenticated endpoints or compare vendor IDs with account IDs.
+  Future<List<Map<String, dynamic>>> getFlashProducts() async {
+    final products = <Object, Map<String, dynamic>>{};
+    var page = 1;
+    while (true) {
+      final response = await searchProducts(page: page, pageSize: 100);
+      final results = List<Map<String, dynamic>>.from(response['results'] ?? []);
+      for (final product in results) {
+        if (product['featured'] == true) products[product['id']] = product;
+      }
+      final totalPages = int.tryParse('${response['total_pages']}');
+      final count = int.tryParse('${response['count']}');
+      final pageSize = int.tryParse('${response['page_size']}') ?? 100;
+      final hasMore = totalPages != null
+          ? page < totalPages
+          : response.containsKey('next')
+              ? response['next'] != null
+              : count != null
+                  ? page * pageSize < count
+                  : results.length == pageSize;
+      if (!hasMore) break;
+      page++;
+    }
+    return products.values.toList();
+  }
+
   // 16. SEARCH VENDORS
   Future<Map<String, dynamic>> searchVendors({
-    double? latitude,
-    double? longitude,
     int pageSize = 20,
     int page = 1,
     String? search,
@@ -414,8 +447,6 @@ class ApiService {
     final queryParams = {
       'page_size': pageSize.toString(),
       'page': page.toString(),
-      if (latitude != null) 'latitude': latitude.toString(),
-      if (longitude != null) 'longitude': longitude.toString(),
       if (search != null && search.isNotEmpty) 'search': search,
       if (sort != null && sort.isNotEmpty) 'sort': sort,
       if (categories != null && categories.isNotEmpty) 'categories': categories.join(','),

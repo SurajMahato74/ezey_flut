@@ -241,7 +241,6 @@ class _VendorProfileCompletionScreenState extends State<VendorProfileCompletionS
         'account_number': _accountNumberController.text,
         'account_holder_name': _accountHolderController.text,
         'bank_name': _bankNameController.text,
-        'delivery_radius': '5.0',
         'min_order_amount': '0',
         'delivery_fee': '0',
         'free_delivery_above': '0',

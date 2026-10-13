@@ -1,3 +1,4 @@
+import '../widgets/featured_product_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -40,6 +41,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   List<Map<String, dynamic>> _categoryParameters = [];
   List<Map<String, dynamic>> _subcategoryParameters = [];
   
+  bool _featureAfterSaving = false;
   bool _freeDelivery = false;
   bool _customDeliveryEnabled = false;
   bool _isLoading = false;
@@ -339,6 +341,23 @@ class _AddProductScreenState extends State<AddProductScreen> {
       final responseBody = await response.stream.bytesToString();
 
       if (response.statusCode == 201) {
+        if (!mounted) return;
+        if (_featureAfterSaving) {
+          final product = jsonDecode(responseBody) as Map<String, dynamic>;
+          await showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('Product saved'),
+              content: SizedBox(
+                width: 480,
+                child: SingleChildScrollView(child: FeaturedProductPanel(productId: product['id'] as int)),
+              ),
+              actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Done'))],
+            ),
+          );
+        }
+        if (!mounted) return;
         Navigator.pop(context, true); // Return true on success
         _showSnackBar('Product added successfully! 🎉', AppTheme.primaryColor);
       } else {
@@ -348,7 +367,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     } catch (e) {
       _showSnackBar('Error adding product: $e', Colors.red);
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -454,6 +473,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     ],
                     _buildPricingSection(),
                     const SizedBox(height: 24),
+                    SwitchListTile.adaptive(
+                      title: const Text('Feature product in Flash', style: TextStyle(color: Colors.white)),
+                      subtitle: const Text('Choose a paid package after saving. Payment requires a separate confirmation.', style: TextStyle(color: Colors.white70)),
+                      value: _featureAfterSaving,
+                      onChanged: _isLoading ? null : (value) => setState(() => _featureAfterSaving = value),
+                    ),
                     _buildDetailsSection(),
                     const SizedBox(height: 24),
                     _buildTagsSection(),

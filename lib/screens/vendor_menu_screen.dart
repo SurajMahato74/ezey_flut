@@ -1,3 +1,5 @@
+import '../services/account_switch_navigation.dart';
+import '../models/user_role.dart';
 // lib/screens/vendor_menu_screen.dart
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -13,7 +15,6 @@ import 'vendor_security_screen.dart';
 import '../services/auth_service.dart';
 import '../services/data_preloader_service.dart';
 import '../config.dart' as appConfig;
-import 'main_app_screen.dart';
 
 class VendorMenuScreen extends StatefulWidget {
   const VendorMenuScreen({super.key});
@@ -26,6 +27,7 @@ class _VendorMenuScreenState extends State<VendorMenuScreen> {
   Map<String, dynamic>? _userProfile;
   Map<String, dynamic>? _vendorProfile;
   bool _isLoading = true;
+  bool _switchingMode = false;
   final ImagePicker _picker = ImagePicker();
 
   @override
@@ -100,70 +102,12 @@ class _VendorMenuScreenState extends State<VendorMenuScreen> {
   }
 
   Future<void> _switchRole(BuildContext context) async {
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final token = authService.token;
-    if (token == null) return;
-
-    // Show loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: Color(0xFFFFD60A)),
-      ),
-    );
-
+    if (_switchingMode) return;
+    setState(() => _switchingMode = true);
     try {
-      final response = await http.post(
-        Uri.parse('${appConfig.Config.baseUrl}/switch-role/'),
-        headers: {
-          'Authorization': 'Token $token',
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: jsonEncode({'role': 'customer'}),
-      );
-
-      if (mounted) Navigator.pop(context); // Remove loading dialog
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        
-        // Force update the role directly and trigger navigation
-        authService.switchRole();
-        
-        // Update available roles to ensure both roles are available
-        authService.updateAvailableRoles(['customer', 'vendor']);
-        
-        // Show success message
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(data['message'] ?? 'Switched to customer successfully'),
-            backgroundColor: const Color(0xFFFFD60A),
-          ),
-        );
-
-        // Navigate to main app screen to trigger rebuild
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const MainAppScreen()),
-          (route) => false,
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to switch role'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) Navigator.pop(context); // Remove loading dialog
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error switching role'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      await switchAccountMode(context, UserRole.customer);
+    } finally {
+      if (mounted) setState(() => _switchingMode = false);
     }
   }
 
@@ -394,7 +338,7 @@ class _VendorMenuScreenState extends State<VendorMenuScreen> {
                     [
                       _buildMenuOption(
                         icon: Icons.swap_horiz,
-                        title: 'Switch to Customer',
+                        title: _switchingMode ? 'Switching to Customer...' : 'Switch to Customer',
                         onTap: () => _switchRole(context),
                       ),
                       _buildMenuOption(

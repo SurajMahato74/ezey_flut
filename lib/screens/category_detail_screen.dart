@@ -4,7 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
-import '../services/delivery_filter_service.dart';
+import '../services/catalog_location_service.dart';
 import '../services/location_service.dart';
 import 'package:provider/provider.dart';
 import '../services/data_preloader_service.dart';
@@ -125,10 +125,7 @@ class _CategoryDetailScreenState extends State<CategoryDetailScreen> {
 
   Future<void> _performSearch(String query) async {
     try {
-      final userPosition = DeliveryFilterService().userPosition;
       final response = await ApiService().searchProducts(
-        latitude: userPosition?.latitude,
-        longitude: userPosition?.longitude,
         search: query,
         pageSize: 50,
         categories: _selectedCategory != null ? [_selectedCategory!['name']] : null,
@@ -141,11 +138,9 @@ class _CategoryDetailScreenState extends State<CategoryDetailScreen> {
           ? allProducts.where((p) => p['category'] == _selectedCategory!['name']).toList()
           : allProducts;
 
-      // Filter by global delivery radius
-      final radiusFilteredProducts = await DeliveryFilterService().filterProducts(categoryFilteredProducts);
 
       // Process products (calculate distance, etc.)
-      final processedProducts = await _processProducts(radiusFilteredProducts);
+      final processedProducts = await _processProducts(categoryFilteredProducts);
 
       final productIds = processedProducts
           .map((p) => p['id'] as int)
@@ -180,7 +175,7 @@ class _CategoryDetailScreenState extends State<CategoryDetailScreen> {
   }
 
   Future<void> _initializeData() async {
-    await DeliveryFilterService().initialize();
+    await CatalogLocationService().initialize();
     await _fetchSubCategories();
     await _fetchFavorites();
   }
@@ -245,7 +240,7 @@ class _CategoryDetailScreenState extends State<CategoryDetailScreen> {
         primaryImg = images.firstWhere((img) => img['is_primary'] == true, orElse: () => images.first);
       }
 
-      final userPosition = DeliveryFilterService().userPosition;
+      final userPosition = CatalogLocationService().userPosition;
       double distance = double.infinity;
       if (userPosition != null && p['vendor_latitude'] != null && p['vendor_longitude'] != null) {
         distance = LocationService().calculateDistance(
@@ -330,10 +325,7 @@ class _CategoryDetailScreenState extends State<CategoryDetailScreen> {
 
   Future<void> _fetchProductsInBackground() async {
     try {
-      final userPosition = DeliveryFilterService().userPosition;
       final response = await ApiService().searchProducts(
-        latitude: userPosition?.latitude,
-        longitude: userPosition?.longitude,
         pageSize: 100,
         page: 1,
         categories: _selectedCategory != null ? [_selectedCategory!['name']] : null,
@@ -341,8 +333,7 @@ class _CategoryDetailScreenState extends State<CategoryDetailScreen> {
 
       final allProducts = List<Map<String, dynamic>>.from(response['results'] ?? []);
       final categoryFilteredProducts = allProducts.where((p) => p['category'] == _selectedCategory!['name']).toList();
-      final radiusFilteredProducts = await DeliveryFilterService().filterProducts(categoryFilteredProducts);
-      final filteredProducts = radiusFilteredProducts.where((product) {
+      final filteredProducts = categoryFilteredProducts.where((product) {
         final subCategoryMatch = _selectedSubCategory.isEmpty ||
             (product['subcategory']?.toLowerCase() == _selectedSubCategory.toLowerCase());
         return subCategoryMatch;
@@ -380,13 +371,8 @@ class _CategoryDetailScreenState extends State<CategoryDetailScreen> {
     });
 
     try {
-      final userPosition = DeliveryFilterService().userPosition;
-      final deliveryRadius = DeliveryFilterService().deliveryRadius;
-      print('User position: $userPosition, Delivery radius: $deliveryRadius');
       print('Selected category: $_selectedCategory');
       final response = await ApiService().searchProducts(
-        latitude: userPosition?.latitude,
-        longitude: userPosition?.longitude,
         pageSize: 100,
         page: loadMore ? _productsPage : 1,
         categories: _selectedCategory != null ? [_selectedCategory!['name']] : null,
@@ -400,12 +386,9 @@ class _CategoryDetailScreenState extends State<CategoryDetailScreen> {
       final categoryFilteredProducts = allProducts.where((p) => p['category'] == _selectedCategory!['name']).toList();
       print('After category filter: ${categoryFilteredProducts.length}');
 
-      // Filter by global delivery radius
-      final radiusFilteredProducts = await DeliveryFilterService().filterProducts(categoryFilteredProducts);
-      print('After radius filter: ${radiusFilteredProducts.length}');
 
       // Filter by subcategory only
-      final filteredProducts = radiusFilteredProducts.where((product) {
+      final filteredProducts = categoryFilteredProducts.where((product) {
         final subCategoryMatch = _selectedSubCategory.isEmpty ||
             (product['subcategory']?.toLowerCase() == _selectedSubCategory.toLowerCase());
         return subCategoryMatch;
@@ -445,7 +428,7 @@ class _CategoryDetailScreenState extends State<CategoryDetailScreen> {
 
   Future<List<Map<String, dynamic>>> _processProducts(List<Map<String, dynamic>> products) async {
     print('Processing products: ${products.length}');
-    final userPosition = DeliveryFilterService().userPosition;
+    final userPosition = CatalogLocationService().userPosition;
 
     final filtered = products.where((product) {
       // Stock filter

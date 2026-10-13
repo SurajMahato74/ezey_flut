@@ -1,14 +1,11 @@
+import '../services/account_switch_navigation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import '../screens/role_selection_screen.dart';
-import '../screens/main_app_screen.dart';
 import '../main.dart';
 import '../models/user_role.dart';
-import '../config.dart' as appConfig;
 import '../widgets/unified_bottom_nav.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
@@ -16,7 +13,6 @@ import 'products_page.dart';
 import 'order_history_screen.dart';
 import 'cart_screen.dart';
 import 'message_inbox_screen.dart' hide UserRole;
-import 'vendor_profile_completion_screen.dart';
 import 'personal_information_screen.dart';
 import 'privacy_security_screen.dart';
 import 'wishlist_screen.dart';
@@ -34,6 +30,8 @@ class CustomerProfileScreen extends StatefulWidget {
 
 class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
   int _notificationCount = 0;
+  bool _switchingMode = false;
+  String? _vendorStatusError;
   static const String _defaultBgImage = 'https://lh3.googleusercontent.com/aida-public/AB6AXuCbo_bhMXyXGEFotmoD-1a2kWTx35J1h6pkdf5qx9wjtuCQ1aJpTStkbegDqvWMq--X_CucQ6eT9Qk3icjsxHX8uvZZdvI1ifXDGM0mS3HtALIv7k4sIYwWU61NmwYBj5ir8CH-1kCH_l0CQVUFUP8N_0zfrLpharNdNR1PJGcUBiZgGhXhn9gdNG1q68YKQ5Cfh10QR6ZjwdOmyYJh9DZtHh-WSvbrR7dge2b7ZM0XYAgulzsFGRSbbVp_K-IO0M0vWbFQMaKHQcsI';
   static const String _defaultProfileImage = 'https://lh3.googleusercontent.com/aida-public/AB6AXuA0kI0LRPCd362lnEBvHFYKKatvUcbMrqL0XNuBrFi9-McmQ3x3w80qsXJahZZTPv7R57vM9g1li2ZURvLWJXCO3cCJp6ZyIJ4duKoa_6HosGiKPWpNnsc2NGPlNDXrHikNJKLrW9wWNIqlf2SITSnCKLq0ZbJyTKlAcsWHzuejD4oY_S2iviSF6BIGE8f4mypk7jLVAf4Efmocx5UVB3cUcOqWk_7TyXr2iIHEr_7mPuPEoOTciXCE-PNiC4uuFX2nJ9BwM5fECm17';
 
@@ -41,6 +39,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
   void initState() {
     super.initState();
     _fetchNotificationCount();
+    _refreshVendorStatus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _preloadImages();
     });
@@ -87,71 +86,26 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
     }
   }
 
-  Future<void> _switchToVendor(BuildContext context) async {
-    final authService = AuthService();
-    final token = authService.token;
-    if (token == null) return;
-
-    // Show loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: Color(0xFFFFD60A)),
-      ),
-    );
-
+  Future<void> _refreshVendorStatus() async {
+    if (!AuthService().isLoggedIn) return;
     try {
-      final response = await http.post(
-        Uri.parse('${appConfig.Config.baseUrl}/switch-role/'),
-        headers: {
-          'Authorization': 'Token $token',
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: jsonEncode({'role': 'vendor'}),
-      );
+      await AuthService().refreshVendorProfileStatus();
+      if (mounted) setState(() => _vendorStatusError = null);
+    } catch (error) {
+      if (mounted) setState(() => _vendorStatusError = accountSwitchError(error));
+    }
+  }
 
-      if (mounted) Navigator.pop(context); // Remove loading dialog
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        
-        // Force update the role directly and trigger navigation
-        authService.switchRole();
-        
-        // Update available roles to ensure both roles are available
-        authService.updateAvailableRoles(['customer', 'vendor']);
-        
-        // Show success message
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(data['message'] ?? 'Switched to vendor successfully'),
-            backgroundColor: const Color(0xFFFFD60A),
-          ),
-        );
-
-        // Navigate to main app screen to trigger rebuild
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const MainAppScreen()),
-          (route) => false,
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to switch role'),
-            backgroundColor: Colors.red,
-          ),
-        );
+  Future<void> _switchToVendor(BuildContext context) async {
+    if (_switchingMode) return;
+    setState(() => _switchingMode = true);
+    try {
+      await switchAccountMode(context, UserRole.vendor);
+    } finally {
+      if (mounted) {
+        setState(() => _switchingMode = false);
+        await _refreshVendorStatus();
       }
-    } catch (e) {
-      if (mounted) Navigator.pop(context); // Remove loading dialog
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error switching role'),
-          backgroundColor: Colors.red,
-        ),
-      );
     }
   }
 
@@ -409,26 +363,15 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
                   [
                     Builder(
                       builder: (context) {
-                        final hasVendorRole = AuthService().availableRoles.contains('vendor');
+                        final profileExists = AuthService().vendorProfileExists;
+                        final hasVendorRole = profileExists == true;
                         return _buildVendorLikeMenuOption(
                           icon: hasVendorRole ? Icons.storefront : Icons.verified_user,
-                          title: hasVendorRole ? 'Switch to Vendor' : 'Become a Vendor',
-                          subtitle: hasVendorRole 
-                              ? 'Access your vendor dashboard' 
-                              : 'Start selling on the platform',
-                          onTap: () async {
-                            if (hasVendorRole) {
-                              // Switch to Vendor with API call
-                              await _switchToVendor(context);
-                            } else {
-                              // Become a Vendor
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => const VendorProfileCompletionScreen(),
-                                ),
-                              );
-                            }
-                          },
+                          title: _switchingMode ? 'Checking vendor account...' : profileExists == false ? 'Become a Vendor' : 'Switch to Vendor',
+                          subtitle: _vendorStatusError ?? (profileExists == false
+                              ? 'Start selling on the platform'
+                              : 'Access your vendor account; approval is required'),
+                          onTap: () => _switchToVendor(context),
                         );
                       }
                     ),

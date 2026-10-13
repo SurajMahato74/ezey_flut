@@ -55,7 +55,6 @@ class _VendorProfileScreenState extends State<VendorProfileScreen>
     final TextEditingController _stateController = TextEditingController();
     final TextEditingController _pincodeController = TextEditingController();
     final TextEditingController _descriptionController = TextEditingController();
-    final TextEditingController _deliveryRadiusController = TextEditingController();
     final TextEditingController _minOrderAmountController = TextEditingController();
     final TextEditingController _bankNameController = TextEditingController();
     final TextEditingController _accountNumberController = TextEditingController();
@@ -146,7 +145,6 @@ class _VendorProfileScreenState extends State<VendorProfileScreen>
     _stateController.text = data['state'] ?? '';
     _pincodeController.text = data['pincode'] ?? '';
     _descriptionController.text = data['description'] ?? '';
-    _deliveryRadiusController.text = data['delivery_radius']?.toString() ?? '';
     _minOrderAmountController.text = data['min_order_amount']?.toString() ?? '';
     _bankNameController.text = data['bank_name'] ?? '';
     _accountNumberController.text = data['account_number'] ?? '';
@@ -189,7 +187,6 @@ class _VendorProfileScreenState extends State<VendorProfileScreen>
     _stateController.dispose();
     _pincodeController.dispose();
     _descriptionController.dispose();
-    _deliveryRadiusController.dispose();
     _minOrderAmountController.dispose();
     _bankNameController.dispose();
     _accountNumberController.dispose();
@@ -338,7 +335,6 @@ class _VendorProfileScreenState extends State<VendorProfileScreen>
         'state': _stateController.text,
         'pincode': _pincodeController.text,
         'description': _descriptionController.text,
-        'delivery_radius': double.tryParse(_deliveryRadiusController.text),
         'min_order_amount': _minOrderAmountController.text,
         'bank_name': _bankNameController.text,
         'account_number': _accountNumberController.text,
@@ -1384,7 +1380,6 @@ class _VendorProfileScreenState extends State<VendorProfileScreen>
       _buildEditField('State', _stateController),
       _buildEditField('Pincode', _pincodeController),
       _buildEditField('Description', _descriptionController, maxLines: 4),
-      _buildEditField('Delivery Radius (km)', _deliveryRadiusController),
       _buildEditField('Min Order Amount', _minOrderAmountController),
       const SizedBox(height: 16),
       Text(
@@ -1415,7 +1410,6 @@ class _VendorProfileScreenState extends State<VendorProfileScreen>
     final city = _vendorData!['city'] ?? '';
     final state = _vendorData!['state'] ?? '';
     final pincode = _vendorData!['pincode'] ?? '';
-    final deliveryRadius = _vendorData!['delivery_radius']?.toString() ?? '';
     final minOrderAmount = _vendorData!['min_order_amount']?.toString() ?? '';
     final businessType = _vendorData!['business_type'] ?? '';
     final avgDeliveryTime = _vendorData!['estimated_delivery_time'] ?? '25 mins';
@@ -1445,7 +1439,6 @@ class _VendorProfileScreenState extends State<VendorProfileScreen>
       if (businessType.isNotEmpty) _buildContactInfo('🏢', 'Type: $businessType'),
       _buildContactInfo('⏱️', 'Avg Delivery: $avgDeliveryTime'),
       if (minOrderAmount.isNotEmpty) _buildContactInfo('💰', 'Min Order: Rs. $minOrderAmount'),
-      if (deliveryRadius.isNotEmpty) _buildContactInfo('📍', 'Delivery Radius: ${deliveryRadius}km'),
       const SizedBox(height: 16),
       Text(
         'Contact Information',

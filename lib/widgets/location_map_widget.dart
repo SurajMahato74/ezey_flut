@@ -6,14 +6,12 @@ class LocationMapWidget extends StatefulWidget {
   final Function(double lat, double lng, String address) onLocationSelected;
   final double? vendorLat;
   final double? vendorLng;
-  final double? maxRadius;
 
   const LocationMapWidget({
     super.key,
     required this.onLocationSelected,
     this.vendorLat,
     this.vendorLng,
-    this.maxRadius,
   });
 
   @override

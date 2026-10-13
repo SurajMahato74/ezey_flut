@@ -6,7 +6,7 @@ import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
-import '../services/location_service.dart';
+import '../services/catalog_location_service.dart';
 import '../services/data_preloader_service.dart';
 import '../utils/delivery_utils.dart';
 import '../utils/refresh_helper.dart';
@@ -252,13 +252,9 @@ class _ProductsPageState extends State<ProductsPage> {
   });
 
   try {
-    final location = await LocationService().getCurrentPosition();
-    final latitude = location?.latitude;
-    final longitude = location?.longitude;
+    final location = CatalogLocationService().userPosition;
 
     final data = await ApiService().searchProducts(
-      latitude: latitude,
-      longitude: longitude,
       page: loadMore ? _productsPage : 1,
       search: _searchQuery.isNotEmpty ? _searchQuery : null,
       sort: _sortBy.isNotEmpty ? _sortBy : null,
@@ -340,21 +336,7 @@ Future<List<Map<String, dynamic>>> _processProducts(
     final double priceValue = double.tryParse(p['price'].toString()) ?? 0.0;
     final bool inPriceRange = priceValue >= _currentMinPrice && priceValue <= _currentMaxPrice;
 
-    double distance = double.infinity;
-    if (location != null &&
-        p['vendor_latitude'] != null &&
-        p['vendor_longitude'] != null) {
-      distance = calculateDistance(
-        location.latitude,
-        location.longitude,
-        p['vendor_latitude'],
-        p['vendor_longitude'],
-      );
-    }
-    final double deliveryRadius = getDeliveryRadiusSync(p) ?? double.infinity;
-    final bool withinRadius = distance == double.infinity || distance <= deliveryRadius;
-
-    return inPriceRange && withinRadius;
+    return inPriceRange;
   }).map<Map<String, dynamic>>((dynamic rawProduct) {
     final p = rawProduct as Map<String, dynamic>;
 

@@ -5,7 +5,7 @@ import '../theme/app_theme.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/cart_service.dart';
-import '../services/delivery_filter_service.dart';
+import '../services/catalog_location_service.dart';
 import '../services/location_service.dart';
 import 'vendor_profile_screen.dart';
 import 'checkout_screen.dart';
@@ -169,7 +169,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   int? get _vendorId => widget.vendorId ?? _productData?['vendor_id'] ?? _productData?['vendor']?['id'];
 
   String get _distance {
-    final userPos = DeliveryFilterService().userPosition;
+    final userPos = CatalogLocationService().userPosition;
     final venLat = _productData?['vendor_latitude'];
     final venLon = _productData?['vendor_longitude'];
     
@@ -412,12 +412,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     }
 
     try {
-      final locationService = LocationService();
-      final position = await locationService.getCurrentPosition();
-
       final response = await ApiService().searchProducts(
-        latitude: position?.latitude,
-        longitude: position?.longitude,
         categories: [_category],
         pageSize: 10,
         page: 1,
@@ -1218,10 +1213,10 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     }
     
     // Handle distance - calculate dynamically like home screen
-    final distance = DeliveryFilterService().userPosition != null
+    final distance = CatalogLocationService().userPosition != null
         ? '${LocationService().calculateDistance(
-            DeliveryFilterService().userPosition!.latitude,
-            DeliveryFilterService().userPosition!.longitude,
+            CatalogLocationService().userPosition!.latitude,
+            CatalogLocationService().userPosition!.longitude,
             product['vendor_latitude'] ?? 0.0,
             product['vendor_longitude'] ?? 0.0,
           ).toStringAsFixed(1)} km'

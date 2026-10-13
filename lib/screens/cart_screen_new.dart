@@ -6,7 +6,6 @@ import 'checkout_screen.dart';
 import '../services/cart_service.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
-import '../services/location_service.dart';
 
 class CartScreen extends StatefulWidget {
   const CartScreen({super.key});
@@ -24,7 +23,6 @@ class _CartScreenState extends State<CartScreen> {
   final CartService _cartService = CartService();
   final AuthService _authService = AuthService();
   final ApiService _apiService = ApiService();
-  final LocationService _locationService = LocationService();
 
   @override
   void initState() {
@@ -51,10 +49,7 @@ class _CartScreenState extends State<CartScreen> {
 
   Future<void> _loadRecommendedProducts() async {
     try {
-      final location = _locationService.getLocation();
       final response = await _apiService.searchProducts(
-        latitude: location?.latitude,
-        longitude: location?.longitude,
         pageSize: 6,
       );
       setState(() {

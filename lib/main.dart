@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -5,8 +6,10 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'screens/splash_screen.dart';
+import 'screens/web_landing_screen.dart';
 import 'screens/role_selection_screen.dart';
 import 'screens/main_app_screen.dart';
+import '../models/user_role.dart';
 import 'services/auth_service.dart';
 import 'services/data_preloader_service.dart';
 import 'services/navigation_service.dart';
@@ -188,14 +191,34 @@ class _AppEntryWithRefreshState extends State<AppEntryWithRefresh> with WidgetsB
 
   @override
   Widget build(BuildContext context) {
-    return Builder(
-      builder: (context) {
-        final authService = Provider.of<AuthService>(context, listen: false);
+    // Listen to AuthService so this rebuilds when the role/login state changes
+    return Consumer<AuthService>(
+      builder: (context, authService, _) {
+        if (!authService.isInitialized) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+        if (authService.initializationError != null) {
+          return Scaffold(body: Center(child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(authService.initializationError!, textAlign: TextAlign.center),
+              TextButton(onPressed: authService.retrySessionRestore, child: const Text('Retry')),
+              TextButton(onPressed: () => authService.loginAsGuest(UserRole.customer), child: const Text('Continue as guest')),
+              TextButton(onPressed: authService.clearSession, child: const Text('Sign in again')),
+            ]),
+          )));
+        }
         if (_splashFinished) {
-          if (authService.isLoggedIn) {
+          // Both logged in users AND guest customers can access the main app
+          if (authService.isLoggedIn || authService.currentRole == UserRole.customer) {
             return const MainAppScreen();
           } else {
-            return const RoleSelectionScreen();
+            // Unauthenticated and not a guest customer
+            if (kIsWeb) {
+              return const WebLandingScreen();
+            } else {
+              return const RoleSelectionScreen();
+            }
           }
         } else {
           return SplashScreen(

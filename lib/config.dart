@@ -20,7 +20,6 @@ class Config {
   static const String verifyOtpEndpoint = '$baseUrl/verify-otp/';
   static const String agreePrivacyPolicyEndpoint = '$baseUrl/agree-privacy-policy/';
   static const String profileEndpoint = '$baseUrl/profile/';
-  static const String deliveryRadiusEndpoint = '$baseUrl/delivery-radius/';
   static const String registerEndpoint = '$baseUrl/register/';                    
   static const String vendorProfilesEndpoint = '$baseUrl/vendor-profiles/';       
   static const String vendorProfileDetailEndpoint = '$baseUrl/vendor-profiles';    

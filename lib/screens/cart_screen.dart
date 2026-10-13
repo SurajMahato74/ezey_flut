@@ -301,8 +301,6 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     try {
       final location = await _locationService.getCurrentPosition();
       final response = await _apiService.searchProducts(
-        latitude: location?.latitude,
-        longitude: location?.longitude,
         pageSize: 6,
         page: 1,
       );
@@ -357,8 +355,6 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     try {
       final location = await _locationService.getCurrentPosition();
       final response = await _apiService.searchProducts(
-        latitude: location?.latitude,
-        longitude: location?.longitude,
         pageSize: 6,
         page: currentPage + 1,
       );

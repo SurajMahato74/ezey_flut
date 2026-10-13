@@ -93,17 +93,18 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
 
     await Future.delayed(const Duration(milliseconds: 500));
 
+    // Start preloading data in the background
     _preloader.preloadAppData();
 
-    await Future.wait([
-      Future.delayed(const Duration(milliseconds: 1500)),
-      _waitForPreloadingComplete(),
-    ]);
+    // Just wait for the text animation to finish (1.5 seconds)
+    // REMOVED: _waitForPreloadingComplete() so we don't get stuck if the network is slow
+    await Future.delayed(const Duration(milliseconds: 1500));
 
-    await Future.delayed(const Duration(milliseconds: 200));
+    if (!mounted) return;
     widget.onSplashComplete?.call();
   }
 
+  // Safely kept but unused just in case
   Future<void> _waitForPreloadingComplete() async {
     while (_preloader.isPreloading) {
       await Future.delayed(const Duration(milliseconds: 100));
